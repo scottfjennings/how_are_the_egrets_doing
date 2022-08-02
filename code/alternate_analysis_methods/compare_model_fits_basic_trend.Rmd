@@ -1,0 +1,216 @@
+---
+title: 'Compare predictions of subregion nest abundance between a few model types'
+output: word_document
+date: "`r Sys.Date()`"
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      error = FALSE,
+                      fig.width = 8.5,
+                      fig.height = 8)
+```
+
+
+
+```{r}
+library(tidyverse)
+library(MASS)
+library(cowplot)
+library(birdnames)
+library(here)
+
+
+#source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
+source(here("code/hep_trend_utilities.r"))
+source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
+
+```
+
+```{r}
+# prepare data ----
+hepdata_location = here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")
+# all these functions are in HEP_utility_functions.R
+hep_sites <- hep_sites_from_access(hepdata_location) %>% 
+  dplyr::select(code, parent.code, site.name, parent.site.name, subregion)
+
+options(scipen = 999)
+
+start.year = 1994
+end.year = 2019
+
+
+analysis_table <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
+  full_join(hep_sites) %>%
+  filter(between(year, start.year, end.year), peakactvnsts >= 0) %>% 
+  cut_never_nested() %>% 
+  filter(!species %in% c("DCCO", "CAEG"), peakactvnsts >= 0, !is.na(year), between(year, start.year, end.year)) %>% 
+  dplyr::select(year, subregion, code, species, peakactvnsts) 
+
+
+spp_subreg_nyears <- analysis_table %>% 
+  group_by(year, subregion, species) %>% 
+  summarise(tot.nests = sum(peakactvnsts)) %>% 
+  ungroup() %>% 
+  filter(tot.nests > 0) %>% 
+  group_by(subregion, species) %>% 
+  summarise(nyears = n())
+  
+  
+trend_analysis_table <- analysis_table  %>% 
+  right_join(spp_subreg_nyears %>% filter(nyears >= 5) %>% dplyr::select(-nyears)) %>% 
+  group_by(year, subregion, species) %>% 
+  summarise(tot.nests = sum(peakactvnsts)) %>% 
+  ungroup() %>% 
+  bind_rows(analysis_table %>% # add duplicate of all data with subregion set to "All" 
+              group_by(year, species) %>%
+              summarise(tot.nests = sum(peakactvnsts)) %>%
+              ungroup() %>%
+              mutate(subregion = "All")) %>% 
+  mutate(log.nests = log(tot.nests + 1))
+
+# for mapping through species and subregions
+spp_subreg <- distinct(trend_analysis_table, species, subregion) %>% 
+  mutate(spp.subreg = paste(species, subregion, sep = "_"))
+
+```
+
+
+
+```{r}
+# fit models ----
+# linear model on log transformed nest abundance
+
+spp_subreg_mods_log <- map2(spp_subreg$species, spp_subreg$subregion, fit_mods_log_trans)
+names(spp_subreg_mods_log) <- spp_subreg$spp.subreg
+
+
+# linear model on untransformed nest abundance
+
+spp_subreg_mods <- map2(spp_subreg$species, spp_subreg$subregion, fit_mods_no_trans)
+names(spp_subreg_mods) <- spp_subreg$spp.subreg
+
+# negative binomial glm on untransformed nest abundance
+
+spp_subreg_mods_glmnb <- map2(spp_subreg$species, spp_subreg$subregion, fit_mods_glmbn)
+names(spp_subreg_mods_glmnb) <- spp_subreg$spp.subreg
+
+
+# negative binomial glm on untransformed nest abundance
+
+spp_subreg_mods_glmnb_year2 <- map2(spp_subreg$species[-20], spp_subreg$subregion[-20], fit_mods_glmbn_year2)
+names(spp_subreg_mods_glmnb_year2) <- spp_subreg$spp.subreg[-20]
+
+
+```
+
+```{r}
+# get model predictions
+preds_log <- map2_df(spp_subreg_mods_log, names(spp_subreg_mods_log), get_preds_log)
+preds_lm <- map2_df(spp_subreg_mods, names(spp_subreg_mods), get_preds_lm)
+preds_glmnb <- map2_df(spp_subreg_mods_glmnb, names(spp_subreg_mods_glmnb), get_preds_glmnb)
+preds_glmnb_year2 <- map2_df(spp_subreg_mods_glmnb_year2, names(spp_subreg_mods_glmnb_year2), get_preds_glmnb)
+
+```
+
+```{r}
+# combine predictions
+preds_combined <- full_join(preds_log %>% 
+                    dplyr::select(subregion, species, year, estimate.log = estimate, lci.log = lci, uci.log = uci),
+                  preds_lm %>% 
+                    dplyr::select(subregion, species, year, estimate.lm = estimate, lci.lm = lci, uci.lm = uci)) %>%
+  full_join(preds_glmnb %>% 
+                    dplyr::select(subregion, species, year, estimate.glmnb = estimate, lci.glmnb = lci, uci.glmnb = uci)) %>% 
+  full_join(preds_glmnb_year2 %>% 
+                    dplyr::select(subregion, species, year, estimate.glmnb.yr2 = estimate, lci.glmnb.yr2 = lci, uci.glmnb.yr2 = uci))
+
+
+preds_long <- preds_combined %>% 
+  pivot_longer(cols = contains(c("estimate", "lci", "uci"))) %>% 
+  separate(name, into = c("type", "model"), sep = "\\.", extra = "merge") %>%
+  arrange(subregion, species) 
+
+preds <- preds_long %>% 
+  pivot_wider(id_cols = c("species", "subregion", "year", "model"), names_from = type, values_from = value)
+
+
+
+
+plot_pred_comparison <- function(zspp) {
+  raw_dat <- trend_analysis_table %>% 
+    filter(species == zspp) %>% 
+    dplyr::select(species, subregion, year, tot.nests)
+
+  pred_dat <- preds %>% 
+    filter(species == zspp) %>% 
+    left_join(raw_dat) %>% 
+    left_join(subreg_key) 
+
+mod_pred_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = estimate, color = model), size = 1) +
+  geom_ribbon(aes(x = year, ymin = lci, ymax = uci, fill = model), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests))  + 
+  facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Nest abundance",
+       x = "Year",
+       title = translate_bird_names(zspp, "alpha.code", "common.name")) +
+  theme_bw()
+
+mod_pred_plot
+}
+
+
+```
+
+Here we fit 4 versions of linear models to data on total number of nests observed in each subregion and across the entire study area.
+
+The first 3 model versions are of the form: response ~ year
+
+*the log model is a linear model fitted to the natural log-transformed number of nests
+
+*the lm model is a linear model fitted to the untransformed number of nests
+
+*the glmnb model is a negative binomial GLM fitted to the untransformed number of nests.
+
+*the glmnb.yr2 model is the same as glmnb, but has an extra term for the quadratic year effect.
+
+
+For log, glmnb, and glmnb.yr2, the model predictions were back-transformed. Predictions from all model types are plotted against the raw data to evaluate which method provides the best estimates of nest abundance, paying particular attention to predictions for the beginning and end of the study period.
+
+An advantage of the log model is that back transformed model coefficients can be interpreted as the annual proportional change in nest abundance, and valid CI can be calculated for this estimate.
+An advantage of both glmnb models is that the error distribution is best suited for count data, especially overdispersed count data.
+
+In general the 4 methods yield similar results. However, for species X subregion combinations where the number of nests changes by >1 order of magnitude across the study period, the log and glmnb models tend to highly overestimate nests abundance at the higher end. Thus, the plain linear model seems to provide better estimates at higher abundances, but when observed abundances were near 0, the linear model often yields predictions <0 which are nonsensical for this application. The glmnb.yr2 model provides a much better fit to these species X subregion cases with large changes in abundance, at the relatively small cost of slightly more complicated interpretation of model coefficients.
+
+A fifth option which may yield better end point estimates of nesting abundance (but will not provide an overall trend estimate with valid CI) would be a generalized additive model or other smoothing function. I have not yet formally evaluated this method. 
+
+
+```{r}
+
+plot_pred_comparison("GREG")
+
+```
+
+```{r}
+
+plot_pred_comparison("GBHE")
+
+```
+
+```{r}
+
+plot_pred_comparison("SNEG")
+
+```
+
+```{r}
+
+plot_pred_comparison("BCNH")
+
+```

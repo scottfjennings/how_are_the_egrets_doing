@@ -1,0 +1,563 @@
+---
+title: ""
+author: ""
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      error = FALSE)
+```
+
+
+
+```{r}
+
+
+
+# combine hep data with predictors
+
+library(tidyverse)
+library(MASS)
+library(AICcmodavg)
+library(lme4)
+library(devtools)
+library(flextable)
+library(ftExtra)
+library(officer)
+library(grid)
+library(cowplot)
+library(birdnames)
+
+source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
+
+options(scipen = 999)
+
+start.year = 1995
+end.year = 2021
+```
+
+
+```{r}
+
+# calculate the cumulative annual rainfall from march of the previous year through feb of the current year
+# use of this rainfall value in a model will assume that the rainfall effect on current year nest abundance acts on productivity the previous breeding season and on survival of adults and juv from previous breeding season through onset of current breeding season
+birdyear_rain_code <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/hep_prism_combined") %>% 
+  mutate(month = as.numeric(month),
+         year = as.numeric(year)) %>% 
+  mutate(birdyear = ifelse(month <= 2, year, year + 1)) %>% 
+  group_by(parent.code, birdyear) %>% 
+  summarise(birdyear.rain = sum(rain.mm)) %>% 
+  ungroup()
+
+birdyear_rain_region <- birdyear_rain_code %>% 
+  group_by(birdyear) %>% 
+  summarise(mean.rain = mean(birdyear.rain))
+
+# combine data ----
+
+abund_rain <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>% 
+  filter(peakactvnsts > 0) %>% 
+  separate(code, into = "parent.code", sep = "\\.", remove = FALSE) %>% 
+  mutate(parent.code = as.numeric(parent.code)) %>% 
+  group_by(year, species) %>% 
+  summarise(nest.abund = sum(peakactvnsts),
+            num.col = n()) %>% 
+  ungroup() %>% 
+  ungroup() %>% 
+  full_join(., rename(birdyear_rain_region, year = birdyear)) %>% 
+  filter(year >= start.year, year <= end.year)
+
+
+change_rain <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/colony_changes_bycode") %>%
+  separate(code, into = "parent.code", sep = "\\.", remove = FALSE) %>% 
+  mutate(parent.code = as.numeric(parent.code)) %>% 
+  full_join(., rename(birdyear_rain_region, year = birdyear)) %>%
+  mutate(per.change = case_when(colony.status == "colonized" ~ peakactvnsts * 100,
+                                TRUE ~ as.numeric(per.change))) %>% 
+  filter(!is.na(per.change), colony.status != "stay.abandoned") %>% 
+  group_by(year, species) %>% 
+  mutate(max.prev.abund = max(prev.yr.nsts, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate(col.wt = prev.yr.nsts/max.prev.abund,
+         weighted.change = per.change * col.wt) %>% 
+  filter(year >= start.year, year <= end.year)
+
+
+
+znewdata <- data.frame(year = distinct(birdyear_rain_region, birdyear)$birdyear,
+                       mean.rain = mean(birdyear_rain_region$mean.rain)) %>% 
+  filter(year >= start.year, year <= end.year)
+
+```
+
+
+```{r}
+
+# functions
+theme_wbird <- function (base_size = 12, base_family = "") {
+    theme_bw(base_size = base_size, base_family = base_family) %+replace% 
+        theme(
+            panel.background = element_rect(fill="white"),
+            panel.grid.major = element_line(colour = "gray80"),
+            panel.grid.minor = element_line(colour = "gray80")
+    )   
+}
+
+pretty_modnames <- function(zmodnames) {
+           zmodnames = gsub("_nb|_lmm", "", zmodnames)
+         zmodnames = gsub("_", " + ", zmodnames)
+         zmodnames = gsub("2", "^2^", zmodnames)
+         zmodnames = gsub("year", "Year", zmodnames)
+         zmodnames = gsub("rain", "Rain", zmodnames)
+         zmodnames = gsub("intercept", "Intercept only", zmodnames)
+}
+
+# glm-negative binomial candidate set for total nest abundance ----
+abund_mods_nb <- function(zspecies) {
+  abund_rain <- filter(abund_rain, year != 2020)
+# year only
+year_nb <- abund_rain %>% 
+  filter(species == zspecies) %>% 
+  glm.nb(nest.abund ~ year, data = .)
+
+# rain only, but still with year nb
+rain_nb <- abund_rain %>% 
+  filter(species == zspecies) %>% 
+  glm.nb(nest.abund ~ mean.rain, data = .)
+
+# rain and year, but still with year nb
+year_rain_nb <- abund_rain %>% 
+  filter(species == zspecies) %>% 
+  glm.nb(nest.abund ~ mean.rain + year, data = .)
+
+# rain^2 and year, but still with year nb
+year_rain2_nb <- abund_rain %>% 
+  filter(species == zspecies) %>% 
+  glm.nb(nest.abund ~ mean.rain + I(mean.rain^2) + year, data = .)
+
+# year^2, but still with year nb
+year2_nb <- abund_rain %>% 
+  filter(species == zspecies) %>% 
+  glm.nb(nest.abund ~ year + I(year^2), data = .)
+
+# rain^2 and year^2, but still with year nb
+year2_rain2_nb <- abund_rain %>% 
+  filter(species == zspecies) %>% 
+  glm.nb(nest.abund ~ mean.rain + I(mean.rain^2) + year + I(year^2), data = .)
+
+# intercept only, but still with year nb
+intercept_nb <- abund_rain %>% 
+  filter(species == zspecies) %>% 
+  glm.nb(nest.abund ~ 1, data = .)
+
+mods <- list("year_nb" = year_nb, 
+             "rain_nb" = rain_nb, 
+             "year_rain_nb" = year_rain_nb, 
+             "year_rain2_nb" = year_rain2_nb,
+             "year2_nb" = year2_nb,
+             "year2_rain2_nb" = year2_rain2_nb,
+             "intercept_nb" = intercept_nb)
+return(mods)
+}
+
+
+
+# lmm candidate set for total nest abundance ----
+change_mods_lmm <- function(zspecies) {
+  
+# year only
+year_lmm <- change_rain %>% 
+  filter(species == zspecies) %>% 
+  lmer(weighted.change ~ year + (1|code), data = ., REML = FALSE)
+
+# rain only, but still with year nb
+rain_lmm <- change_rain %>% 
+  filter(species == zspecies) %>% 
+  lmer(weighted.change ~ mean.rain + (1|code), data = ., REML = FALSE)
+
+# rain and year, but still with year nb
+year_rain_lmm <- change_rain %>% 
+  filter(species == zspecies) %>% 
+  lmer(weighted.change ~ mean.rain + year + (1|code), data = ., REML = FALSE)
+
+# rain^2 and year, but still with year nb
+year_rain2_lmm <- change_rain %>% 
+  filter(species == zspecies) %>% 
+  lmer(weighted.change ~ mean.rain + I(mean.rain^2) + year + (1|code), data = ., REML = FALSE)
+
+# year^2, but still with year nb
+year2_lmm <- change_rain %>% 
+  filter(species == zspecies) %>% 
+  lmer(weighted.change ~ year + I(year^2) + (1|code), data = ., REML = FALSE)
+
+# rain^2 and year^2, but still with year nb
+year2_rain2_lmm <- change_rain %>% 
+  filter(species == zspecies) %>% 
+  lmer(weighted.change ~ mean.rain + I(mean.rain^2) + year + I(year^2) + (1|code), data = ., REML = FALSE)
+
+# rain^2 and year^2, but still with year nb
+intercept_lmm <- change_rain %>% 
+  filter(species == zspecies) %>% 
+  lmer(weighted.change ~ 1 + (1|code), data = ., REML = FALSE)
+
+mods <- list("year_lmm" = year_lmm, 
+             "rain_lmm" = rain_lmm, 
+             "year_rain_lmm" = year_rain_lmm, 
+             "year_rain2_lmm" = year_rain2_lmm,
+             "year2_lmm" = year2_lmm,
+             "year2_rain2_lmm" = year2_rain2_lmm,
+             "intercept_lmm" = intercept_lmm)
+return(mods)
+}
+
+# making output AIC tables
+make_aic_table <- function(nb_aic, lmm_aic = NA) {
+ if(is.na(lmm_aic)){
+ aic_tab <- nb_aic %>% 
+  data.frame() %>% 
+  mutate(Delta_AICc = round(Delta_AICc, 3),
+         AICcWt = round(AICcWt, 2),
+         Modnames = pretty_modnames(Modnames)) %>% 
+  dplyr::select(Modnames, K, Delta_AICc, AICcWt, LL) %>% 
+  flextable() %>% 
+  set_header_labels(Modnames = "Model structure",
+                    Delta_AICc = "\u0394AICc",
+                    AICcWt = "AICc Wt.") %>% 
+  autofit() %>% 
+  align(j = 2:5, align = "center", part = "all")  %>% 
+  border(i = 7, border.bottom = fp_border(color = "black"), part = "body") %>% 
+    colformat_md()
+ } else {
+aic_tab <- bind_rows(nb_aic, lmm_aic) %>% 
+  data.frame() %>% 
+  mutate(response.varb = ifelse(grepl("nb", Modnames), "Total nests", "% change"),
+         response.varb = ifelse(Delta_AICc == 0, response.varb, ""),
+         Delta_AICc = round(Delta_AICc, 3),
+         AICcWt = round(AICcWt, 2),
+         Modnames = pretty_modnames(Modnames)) %>% 
+  dplyr::select(response.varb, Modnames, K, Delta_AICc, AICcWt, LL) %>% 
+  flextable() %>% 
+  set_header_labels(response.varb = "Response\nvariable",
+                    Modnames = "Model structure",
+                    Delta_AICc = "\u0394AICc",
+                    AICcWt = "AICc Wt.") %>% 
+  autofit() %>% 
+  align(j = 3:6, align = "center", part = "all")  %>% 
+  border(i = 7, border.bottom = fp_border(color = "black"), part = "body") %>% 
+    colformat_md()
+ }
+  return(aic_tab)
+}
+
+
+
+# plotting best model
+best_mod_plot_nb <- function(best_mod, spp) {
+raw_dat <- filter(abund_rain, species == spp)
+min_y = floor(min(raw_dat$nest.abund)/100) * 100
+max_y = ceiling(max(raw_dat$nest.abund)/100) * 100
+y_scale = seq(min_y, max_y, by = 200)
+
+ilink <- family(best_mod)$linkinv
+ best_pred = predict(best_mod, znewdata, se.fit=TRUE, type='link') %>% 
+  data.frame() %>% 
+  cbind(znewdata) %>% 
+  ungroup() %>% 
+  mutate(predicted = ilink(fit),
+         lci = ilink(fit - (1.96 * se.fit)),
+         uci = ilink(fit + (1.96 * se.fit)))
+ 
+best_pred %>% 
+  mutate(species = spp) %>% 
+  write.csv(here(paste("documents/report/best_nb_mod_pred_", spp, ".csv", sep = "")), row.names = FALSE)
+
+  
+best_plot <- ggplot(best_pred) +
+  geom_line(aes(x = year, y = predicted)) +
+  geom_ribbon(aes(x = year, ymin = lci, ymax = uci), alpha = 0.25) + 
+  geom_point(data = raw_dat, aes(x = year, y = nest.abund)) +
+  scale_y_continuous(breaks = y_scale, labels = y_scale, limits = c(min_y, max_y)) +
+  geom_text(data = raw_dat, aes(x = year, y = min_y), label = raw_dat$num.col, size = 3) +
+  labs(title = translate_bird_names(spp, "alpha.code", "common.name"),
+       y = "# nests",
+       x = "") +
+  theme_wbird()
+
+return(best_plot)
+}
+
+
+best_mod_plot_lmm <- function(best_mod, spp) {
+  
+  predFun <- function(fit) {
+    predict(fit, znewdata, re.form = NA)
+  }
+  
+best_pred_boot <- bootMer(best_mod, nsim = 200, FUN = predFun, seed = 101)
+year_est <- best_pred_boot$t0 %>% 
+  data.frame() %>% 
+  rename("est" = 1) %>% 
+  mutate(name = paste("X", seq(1:nrow(.)), sep = ""))
+
+get_uci <- function(zyear_pred) {
+uci = zyear_pred %>% quantile(. , .9725)
+}
+get_lci <- function(zyear_pred) {
+lci = zyear_pred %>% quantile(. , .0225)
+}
+year_uci <- best_pred_boot$t %>% 
+  data.frame() %>% 
+  summarise(across(everything(), get_uci)) %>% 
+  pivot_longer(everything(), values_to = "uci")
+year_lci <- best_pred_boot$t %>% 
+  data.frame() %>% 
+  summarise(across(everything(), get_lci)) %>% 
+  pivot_longer(everything(), values_to = "lci")
+
+best_pred <- full_join(year_lci, year_uci) %>% 
+  full_join(year_est) %>% 
+  cbind(znewdata) %>% 
+  mutate()
+
+best_pred %>% 
+  mutate(species = spp) %>% 
+  write.csv(here(paste("documents/report/best_lmm_mod_pred_", spp, ".csv", sep = "")), row.names = FALSE)
+
+mean_change <- change_rain %>% 
+  filter(species == spp) %>% 
+  group_by(year) %>% 
+  summarise(mean.change = mean(weighted.change))
+
+
+best_plot <- ggplot(best_pred) +
+  geom_line(aes(x = year, y = est)) +
+  geom_ribbon(aes(x = year, ymin = lci, ymax = uci), alpha = 0.25) + 
+  geom_point(data = mean_change, aes(x = year, y = mean.change)) +
+  geom_hline(yintercept = 0) +
+  labs(#title = translate_bird_names(spp, "alpha.code", "common.name"),
+       y = "% change\nin # nests",
+       x = "") +
+  theme_wbird()
+
+return(best_plot)
+}
+
+
+table_legend <- function(spp) {
+  tab.num = case_when(spp == "GREG" ~ 1,
+                      spp == "GBHE" ~ 2,
+                      spp == "SNEG" ~ 3,
+                      spp == "BCNH" ~ 4)
+  tab.leg = paste("Table ", tab.num, ". Model selection results for estimating trends in ", translate_bird_names(spp, "alpha.code", "common.name"), " total nests ",
+  #"and % change in total nests",
+  "in the northern San Francisco Bay region, CA, ", start.year, "-", end.year, ". Shown for each model are the ",
+  #"fixed effect",
+  "model structure, number of parameters (K), the difference in AICc value between the current model and the model with lowest AICc value (\u0394AICc), the AICc model weight (AICc Wt.), and the log(Likelihood) (LL).", sep = "")
+  return(tab.leg)
+}
+
+figure_legend <- function(spp) {
+  fig.num = case_when(spp == "GREG" ~ 1,
+                      spp == "GBHE" ~ 2,
+                      spp == "SNEG" ~ 3,
+                      spp == "BCNH" ~ 4)
+  fig.leg = paste("Figure ", fig.num, ". Plotted data and model estimated values from the best supported models for estimating trends in ", translate_bird_names(spp, "alpha.code", "common.name"), " total nests ",
+                  #"and % change in total nests ",
+                  "in the northern San Francisco Bay region, CA, ", start.year, "-", end.year, ". Black dots indicate the raw data, black lines indicate the model estimated value and gray ribbon indicates 95% confidence interval around that estimate. Numbers across the bottom ",
+                  #"of A",
+                  "indicate number of active colonies. Note: 2020 excluded from modeling total # nests due to reduced effort.", sep = "")
+  return(fig.leg)
+}
+
+
+
+```
+
+
+Great Egret 
+
+```{r}
+
+greg_mods_nb <- abund_mods_nb("GREG")
+greg_aic_nb <- aictab(greg_mods_nb, c("year_nb", "rain_nb", "year_rain_nb", "year_rain2_nb", "year2_nb", "year2_rain2_nb", "intercept_nb"))
+greg_best_nb <- greg_mods_nb[filter(greg_aic_nb, Delta_AICc == 0)$Modnames][[1]]
+greg_best_nb_pretty <- pretty_modnames(filter(greg_aic_nb, Delta_AICc == 0)$Modnames)
+
+
+#greg_change_mods <- change_mods_lmm("GREG")
+#greg_aic_lmm <- aictab(greg_change_mods, c("year_lmm", "rain_lmm", "year_rain_lmm", "year_rain2_lmm", "year2_lmm", "year2_rain2_lmm", "intercept_lmm")) %>% 
+#  data.frame()
+#greg_best_lmm <- greg_change_mods[filter(greg_aic_lmm, Delta_AICc == 0)$Modnames][[1]]
+#greg_best_lmm_pretty <- pretty_modnames(filter(greg_aic_lmm, Delta_AICc == 0)$Modnames)
+
+#The best model for estimating percent change in Great Egret colony size in the study area had the `r greg_best_lmm_pretty` fixed effect structure (Table 1). This model suggests that the Great Egret breeding population in our study area FILL IN HERE from `r start.year` to `r end.year` (Figure 1B).  
+ 
+```
+ 
+The best model for estimating total number of Great Egret nests in the study area had the `r greg_best_nb_pretty` structure (Table 1). This model suggests that the total number of Great Egret nests in our study area FILL IN HERE from `r start.year` to `r end.year` (Figure 1A). 
+
+
+<br>
+`r table_legend("GREG")`
+
+<br>
+
+<br>
+```{r} 
+make_aic_table(greg_aic_nb
+               #, greg_aic_lmm
+               )  
+
+```
+
+<br>
+`r figure_legend("GREG")`
+
+<br>
+```{r}
+greg_nb_plot <- best_mod_plot_nb(greg_best_nb, "GREG")
+greg_nb_plot
+#greg_lmm_plot <- best_mod_plot_lmm(greg_best_lmm, "GREG")
+
+#plot_grid(greg_nb_plot, greg_lmm_plot, labels = c("A", "B"), ncol = 1)
+
+```
+
+Great Blue Heron  
+
+
+```{r}
+
+gbhe_mods_nb <- abund_mods_nb("GBHE")
+gbhe_aic_nb <- aictab(gbhe_mods_nb, c("year_nb", "rain_nb", "year_rain_nb", "year_rain2_nb", "year2_nb", "year2_rain2_nb", "intercept_nb"))
+gbhe_best_nb <- gbhe_mods_nb[filter(gbhe_aic_nb, Delta_AICc == 0)$Modnames][[1]]
+gbhe_best_nb_pretty <- pretty_modnames(filter(gbhe_aic_nb, Delta_AICc == 0)$Modnames)
+
+
+#gbhe_change_mods <- change_mods_lmm("GBHE")
+#gbhe_aic_lmm <- aictab(gbhe_change_mods, c("year_lmm", "rain_lmm", "year_rain_lmm", "year_rain2_lmm", "year2_lmm", "year2_rain2_lmm", "intercept_lmm")) %>% 
+#  data.frame()
+#gbhe_best_lmm <- gbhe_change_mods[filter(gbhe_aic_lmm, Delta_AICc == 0)$Modnames][[1]]
+#gbhe_best_lmm_pretty <- pretty_modnames(filter(gbhe_aic_lmm, Delta_AICc == 0)$Modnames)
+
+#The best model for estimating percent change in Great Blue Heron colony size in the study area had the `r gbhe_best_lmm_pretty` fixed effect structure (Table 2). This model suggests that the Great Blue Heron breeding population in our study area FILL IN HERE from `r start.year` to `r end.year` (Figure 2B).  
+ 
+```
+ 
+The best model for estimating total number of Great Blue Heron nests in the study area had the `r gbhe_best_nb_pretty` structure (Table 1). This model suggests that the total number of Great Blue Heron nests in our study area FILL IN HERE from `r start.year` to `r end.year` (Figure 2A). 
+
+
+`r table_legend("GBHE")` 
+<br>
+```{r} 
+make_aic_table(gbhe_aic_nb
+               #, gbhe_aic_lmm
+               )  
+
+```
+
+`r figure_legend("GBHE")`
+<br>
+```{r}
+gbhe_nb_plot <- best_mod_plot_nb(gbhe_best_nb, "GBHE")
+gbhe_nb_plot
+#gbhe_lmm_plot <- best_mod_plot_lmm(gbhe_best_lmm, "GBHE")
+
+#plot_grid(gbhe_nb_plot, gbhe_lmm_plot, labels = c("A", "B"), ncol = 1)
+
+```
+  
+Snowy Egret  
+
+```{r}
+
+sneg_mods_nb <- abund_mods_nb("SNEG")
+sneg_aic_nb <- aictab(sneg_mods_nb, c("year_nb", "rain_nb", "year_rain_nb", "year_rain2_nb", "year2_nb", "year2_rain2_nb", "intercept_nb"))
+sneg_best_nb <- sneg_mods_nb[filter(sneg_aic_nb, Delta_AICc == 0)$Modnames][[1]]
+sneg_best_nb_pretty <- pretty_modnames(filter(sneg_aic_nb, Delta_AICc == 0)$Modnames)
+
+
+#sneg_change_mods <- change_mods_lmm("SNEG")
+#sneg_aic_lmm <- aictab(sneg_change_mods, c("year_lmm", "rain_lmm", "year_rain_lmm", "year_rain2_lmm", "year2_lmm", "year2_rain2_lmm", "intercept_lmm")) %>% 
+#  data.frame()
+#sneg_best_lmm <- sneg_change_mods[filter(sneg_aic_lmm, Delta_AICc == 0)$Modnames][[1]]
+#sneg_best_lmm_pretty <- pretty_modnames(filter(sneg_aic_lmm, Delta_AICc == 0)$Modnames)
+
+
+#The best model for estimating percent change in Snowy Egret colony size in the study area had the `r sneg_best_lmm_pretty` fixed effect structure (Table 3). This model suggests that the Snowy Egret breeding population in our study area FILL IN HERE from `r start.year` to `r end.year` (Figure 3B).  
+ 
+```
+ 
+The best model for estimating total number of Snowy Egret nests in the study area had the `r sneg_best_nb_pretty` structure (Table 3). This model suggests that the total number of Snowy Egret nests in our study area FILL IN HERE from `r start.year` to `r end.year` (Figure 3A). 
+
+
+`r table_legend("SNEG")` 
+<br>
+```{r} 
+make_aic_table(sneg_aic_nb
+               #, sneg_aic_lmm
+               )  
+
+```
+
+`r figure_legend("SNEG")`   
+<br>
+```{r}
+sneg_nb_plot <- best_mod_plot_nb(sneg_best_nb, "SNEG")
+sneg_nb_plot
+#sneg_lmm_plot <- best_mod_plot_lmm(sneg_best_lmm, "SNEG")
+
+
+#plot_grid(sneg_nb_plot, sneg_lmm_plot, labels = c("A", "B"), ncol = 1)
+
+```
+
+
+Black-crowned Night-heron  
+
+```{r}
+
+bcnh_mods_nb <- abund_mods_nb("BCNH")
+bcnh_aic_nb <- aictab(bcnh_mods_nb, c("year_nb", "rain_nb", "year_rain_nb", "year_rain2_nb", "year2_nb", "year2_rain2_nb", "intercept_nb"))
+bcnh_best_nb <- bcnh_mods_nb[filter(bcnh_aic_nb, Delta_AICc == 0)$Modnames][[1]]
+bcnh_best_nb_pretty <- pretty_modnames(filter(bcnh_aic_nb, Delta_AICc == 0)$Modnames)
+
+
+#bcnh_change_mods <- change_mods_lmm("BCNH")
+#bcnh_aic_lmm <- aictab(bcnh_change_mods, c("year_lmm", "rain_lmm", "year_rain_lmm", "year_rain2_lmm", "year2_lmm", "year2_rain2_lmm", "intercept_lmm")) %>% 
+#  data.frame()
+#bcnh_best_lmm <- bcnh_change_mods[filter(bcnh_aic_lmm, Delta_AICc == 0)$Modnames][[1]]
+#bcnh_best_lmm_pretty <- pretty_modnames(filter(bcnh_aic_lmm, Delta_AICc == 0)$Modnames)
+
+#The best model for estimating percent change in Black-crowned Night-heron colony size in the study area had the `r bcnh_best_lmm_pretty` fixed effect structure (Table 4). This model suggests that the Black-crowned Night-heron breeding population in our study area FILL IN HERE from `r start.year` to `r end.year` (Figure 4B). 
+```
+ 
+The best model for estimating total number of Black-crowned Night-heron nests in the study area had the `r bcnh_best_nb_pretty` structure (Table 4). This model suggests that the total number of Black-crowned Night-heron nests in our study area FILL IN HERE from `r start.year` to `r end.year` (Figure 4A). 
+
+ 
+ 
+`r table_legend("BCNH")`  
+<br>
+```{r} 
+make_aic_table(bcnh_aic_nb
+               #, bcnh_aic_lmm
+               )  
+
+```
+
+`r figure_legend("BCNH")`  
+<br>
+```{r}
+bcnh_nb_plot <- best_mod_plot_nb(bcnh_best_nb, "BCNH")
+bcnh_nb_plot
+# bcnh_lmm_plot <- best_mod_plot_lmm(bcnh_best_lmm, "BCNH")
+
+
+# plot_grid(bcnh_nb_plot, bcnh_lmm_plot, labels = c("A", "B"), ncol = 1)
+
+```
+

@@ -1,0 +1,604 @@
+---
+title: ""
+author: ""
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      error = FALSE,
+                      fig.width = 8.5)
+```
+
+
+
+```{r}
+
+
+
+# combine hep data with predictors
+
+library(tidyverse)
+library(cowplot)
+library(birdnames)
+library(here)
+
+
+#source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
+
+source(here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R"))
+source(here("code/hep_trend_utilities.r"))
+
+
+hepdata_location = here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")
+# all these functions are in HEP_utility_functions.R
+hep_sites <- hep_sites_from_access(hepdata_location) %>% 
+  dplyr::select(code, parent.code, site.name, parent.site.name, subregion)
+
+options(scipen = 999)
+
+start.year = 1994
+end.year = 2019
+
+
+
+
+
+dat <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
+  full_join(hep_sites) %>%
+  filter(between(year, start.year, end.year), peakactvnsts >= 0) %>% 
+  cut_never_nested() %>% 
+  filter(!species %in% c("DCCO", "CAEG")) %>% 
+  arrange(code, species, year) %>% 
+  group_by(code, species) %>% 
+  mutate(keep = cut_lead_trail_zeros(peakactvnsts)) %>% 
+  filter(keep == TRUE) %>% 
+  dplyr::select(-keep)
+  
+  
+mean_year = mean(seq(start.year, end.year))
+
+
+colony_weights <- dat %>% 
+  filter(between(year, start.year, end.year)) %>% 
+  mutate(yr.diff.squared = (year - mean_year)^2) %>% 
+  group_by(code, species) %>% 
+  summarise(n.years = n(),
+            count.prod = prod(peakactvnsts + 1),
+            sum.yr.diffs = sum(yr.diff.squared),
+            mean.nests = mean(peakactvnsts)) %>% 
+  ungroup() %>% 
+  mutate(p = ((n.years-1) * sum.yr.diffs)^0.5, # p is the index of sampling effort
+         colony.weight = (count.prod ^ (1/p)) - 1) %>% 
+  arrange(code, species)
+  
+
+analysis_table <- dat %>% 
+  filter(peakactvnsts >= 0, !is.na(year), between(year, start.year, end.year)) %>% 
+  dplyr::select(year, subregion, code, species, peakactvnsts)
+  
+
+
+```
+
+
+```{r}
+# basic glm on total number of nests
+
+zformula = log(tot.nests + 1) ~ year
+
+  mod_coef_ci <- function(ana_table) {
+    zmod <- ana_table %>% 
+      lm(data = ., formula = zformula)
+    
+    zmod_coef_ci <- coef(zmod)%>% 
+      data.frame() %>% 
+      rownames_to_column("varb") %>% 
+      full_join(confint(zmod) %>% data.frame() %>% rownames_to_column("varb")) %>% 
+      rename("coef" = 2, "lci" = 3, "uci" = 4) 
+  }
+
+  
+trend_analysis_table <- analysis_table %>% 
+  right_join(., analysis_table %>% group_by(code, species) %>% count() %>% ungroup() %>% filter(n >= 5)) %>% # remove colonies with fewer than 5 years of data
+  group_by(year, subregion, species) %>% 
+  summarise(tot.nests = sum(peakactvnsts)) %>% 
+  ungroup() %>% 
+  bind_rows(analysis_table %>% # add duplicate of all data with subregion set to "All" 
+              group_by(year, species) %>%
+              summarise(tot.nests = sum(peakactvnsts)) %>%
+              ungroup() %>%
+              mutate(subregion = "All")) %>% 
+  arrange(subregion, species, year) %>% 
+  group_by(subregion, species)  %>% 
+  mutate(keep = cut_lead_trail_zeros(tot.nests)) %>% 
+  filter(keep == TRUE) %>% 
+  dplyr::select(-keep)
+  
+
+
+
+
+abund_coefs_cis <- trend_analysis_table %>% 
+  group_by(subregion, species) %>% 
+  nest() %>% 
+   mutate(
+     mod = data %>% map(mod_coef_ci)
+   ) %>% 
+  dplyr::select(-data) %>% 
+  unnest(cols = c(mod)) %>% 
+  filter(varb == "year") %>% 
+  mutate(subreg.trend.estimate = 100 * (exp(coef)-1),
+         lci = 100 * (exp(lci)-1),
+         uci = 100 * (exp(uci)-1))
+
+#abund_coefs_cis <- abund_coefs_cis %>% 
+#      mutate(coef.resp = exp(coef) %>% round(., 3),
+#             lci.resp = exp(lci) %>% round(., 3),
+#             uci.resp = exp(uci) %>% round(., 3),
+#             plot.text = paste(coef.resp, "(", lci.resp, ", ", uci.resp, ")", sep = ""))
+
+
+
+mod_preds <- function(ana_table) {
+    znewdat = data.frame(year = seq(min(ana_table$year), max(ana_table$year)))
+    zmod <- ana_table %>% 
+      lm(data = ., formula = zformula)
+    
+zmod_preds <- predict(zmod, newdat = znewdat, type = "response", se = TRUE)%>% 
+      data.frame() %>% 
+      bind_cols(znewdat) %>%
+  #mutate(lci = fit - (1.96 * se.fit),
+  #       uci = fit + (1.96 * se.fit))
+  mutate(estimate = exp(fit),
+         lci = exp(fit - (1.96 * se.fit)),
+         uci = exp(fit + (1.96 * se.fit)))
+  }
+
+abund_preds <- trend_analysis_table %>% 
+  group_by(subregion, species) %>% 
+  nest() %>% 
+   mutate(
+     mod = data %>% map(mod_preds)
+   ) %>% 
+  dplyr::select(-data) %>% 
+  unnest(cols = c(mod))
+
+
+```
+
+
+```{r}
+
+plot_pred <- function(zspp) {
+  raw_dat <- trend_analysis_table %>% 
+    filter(species == zspp) %>%
+    left_join(subreg_key)
+  
+
+  
+  
+  pred_dat <- abund_preds %>% 
+    filter(species == zspp) %>% 
+    left_join(subreg_key)
+  
+  
+  
+mod_pred_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = estimate)) +
+  geom_ribbon(aes(x = year, ymin = lci, ymax = uci), alpha = 0.5) +
+  geom_point(data = raw_dat, aes(x = year, y = tot.nests)) +
+  facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Nest abundance",
+       x = "Year",
+       color = "",
+       fill = "",
+       title = translate_bird_names(zspp, "alpha.code", "common.name")) +
+  theme_bw() 
+
+mod_pred_plot
+
+}
+
+
+
+
+```
+
+
+```{r include=FALSE}
+plot_pred("GREG")
+
+```
+
+```{r include=FALSE}
+plot_pred("GBHE")
+
+```
+
+```{r include=FALSE}
+plot_pred("SNEG")
+
+```
+
+```{r include=FALSE}
+plot_pred("BCNH")
+
+```
+
+```{r}
+# "colony regression" trend estimate with bootstrapped 95% CI
+
+trend_boot <- readRDS(here("data/trend_boot_coefs"))
+
+long_boot <- trend_boot %>% 
+  unnest(coefs) %>% 
+  filter(term == "year") %>% 
+  ungroup() %>% 
+  right_join(., dat %>% group_by(code, species) %>% count() %>% filter(n >= 5)) %>% 
+  dplyr::select(subregion, code, species, id, year.coef = estimate) %>% 
+  mutate(trend.estimate = 100 * (exp(year.coef)-1)) %>% 
+  filter(!is.na(trend.estimate))
+
+
+weighted_long_boot <- long_boot  %>% 
+  bind_rows(long_boot %>% mutate(subregion = "All")) %>% 
+  left_join(colony_weights)  %>% 
+  mutate(wt.col.trend = trend.estimate * colony.weight) %>% # weight each colony's trend estimate
+  group_by(subregion, species, id) %>% 
+  summarise(subreg.trend = sum(wt.col.trend), # add up the weighted trend estimates in each subregion
+            subreg.wt = sum(colony.weight)) %>% # add up all the colony weights for each subregion
+  ungroup() %>% 
+  mutate(subreg.trend.estimate = subreg.trend/subreg.wt) # finally divide the summed weighted trend estimates by the summed weights
+
+weighted_trend_coefs <- weighted_long_boot %>% 
+  filter(id == "Apparent")
+  
+weighted_trend_ci <- weighted_long_boot %>% 
+  filter(id != "Apparent") %>% 
+  group_by(subregion, species) %>% 
+  summarise(uci = quantile(subreg.trend.estimate, 0.975),
+            lci = quantile(subreg.trend.estimate, 0.025))
+
+
+weighted_trend_coefs_ci <-  full_join(weighted_trend_coefs, weighted_trend_ci) %>% 
+  filter(!species %in% c("DCCO", "CAEG")) %>% 
+  left_join(subreg_key)
+
+```
+
+
+
+
+
+
+```{r include=FALSE}
+weighted_trend_coefs_ci  %>% 
+  ggplot() +
+  geom_point(aes(x = forcats::fct_rev(subreg.name), y = 100 * subreg.trend.estimate)) +
+  geom_errorbar(aes(x = forcats::fct_rev(subreg.name), ymax = 100 * uci, ymin = 100 * lci)) +
+  geom_hline(yintercept = 0) +
+  facet_wrap(~translate_bird_names(species, "alpha.code", "common.name"), scales = "free_x") +
+  labs(y = "Weighted % change",
+       x = "Subregion") +
+  coord_flip() +
+  theme_bw()
+
+
+
+
+
+
+```
+
+```{r}
+plot_pred_boot <- function(zspp, zsubreg) {
+
+subreg_name = filter(subreg_key, subregion == zsubreg)$subreg.name  
+  
+    raw_dat <- trend_analysis_table %>% 
+    filter(species == zspp, subregion == zsubreg) %>%
+    left_join(subreg_key)
+  
+
+  pred_dat <- abund_preds %>% 
+    filter(species == zspp, subregion == zsubreg) %>% 
+    left_join(subreg_key)
+
+  
+  
+mod_pred_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = estimate)) +
+  geom_ribbon(aes(x = year, ymin = lci, ymax = uci), alpha = 0.5) +
+  geom_point(data = raw_dat, aes(x = year, y = tot.nests)) +
+  labs(y = "Nest abundance",
+       x = "Year",
+       color = "",
+       fill = "") +
+  theme_bw() 
+
+naive_trend <- abund_coefs_cis %>% 
+  filter(species == zspp, subregion == zsubreg, varb == "year") %>% 
+  dplyr::select(subregion, species, subreg.trend.estimate, lci, uci) %>% 
+  mutate(estimate.type = "Basic")
+
+boot_trend <- weighted_trend_coefs_ci %>%
+  filter(species == zspp, subregion == zsubreg) %>% 
+  dplyr::select(subregion, species, subreg.trend.estimate, lci, uci) %>%
+  mutate(estimate.type = "Weighted\nregression") 
+
+trend_plot <- bind_rows(naive_trend, boot_trend) %>% 
+  mutate(estimate.type = factor(estimate.type, levels = c("Basic", "Weighted\nregression"))) %>% 
+  ggplot() +
+  geom_point(aes(x = estimate.type, y = subreg.trend.estimate)) +
+  geom_errorbar(aes(x = estimate.type, ymax = uci, ymin = lci)) +
+  geom_hline(yintercept = 0) +
+  #facet_wrap(~translate_bird_names(species, "alpha.code", "common.name"), scales = "free_x") +
+  labs(y = "Estimated % change",
+       x = "Estimation method") +
+  #coord_flip() +
+  theme_bw()
+
+
+plot_row <- plot_grid(mod_pred_plot, NULL, trend_plot, rel_widths = c(0.7, 0.01, 0.3), ncol = 3)
+
+# now add the title
+title <- ggdraw() + 
+  draw_label(
+    paste(translate_bird_names(zspp, "alpha.code", "common.name"), subreg_name, sep = ", "),
+    x = 0,
+    hjust = 0
+  ) +
+  theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 7)
+  )
+plot_grid(
+  title, plot_row,
+  ncol = 1,
+  # rel_heights values control vertical title margins
+  rel_heights = c(0.1, 1)
+)
+}
+
+
+```
+
+Results  
+
+<br>
+<br>
+
+Great Egret  
+<br>
+```{r}
+
+plot_pred_boot("GREG", "OUC")
+```
+
+```{r}
+plot_pred_boot("GREG", "RUR")
+```
+
+```{r include = FALSE}
+plot_pred_boot("GREG", "NNC")
+```
+
+```{r}
+plot_pred_boot("GREG", "PNM")
+```
+
+```{r}
+plot_pred_boot("GREG", "CSF")
+```
+
+```{r}
+plot_pred_boot("GREG", "SUS")
+```
+
+```{r}
+plot_pred_boot("GREG", "IEB")
+```
+
+```{r}
+plot_pred_boot("GREG", "All") 
+
+```
+
+<br>
+<br>
+
+
+Great Blue Heron  
+<br>
+```{r}
+
+plot_pred_boot("GBHE", "OUC")
+```
+
+```{r}
+plot_pred_boot("GBHE", "RUR")
+```
+
+```{r}
+plot_pred_boot("GBHE", "NNC")
+```
+
+```{r}
+plot_pred_boot("GBHE", "PNM")
+```
+
+```{r}
+plot_pred_boot("GBHE", "CSF")
+```
+
+```{r}
+plot_pred_boot("GBHE", "SUS")
+```
+
+```{r}
+plot_pred_boot("GBHE", "IEB")
+```
+
+```{r}
+plot_pred_boot("GBHE", "All") 
+
+```
+
+<br>
+<br>
+
+Snowy Egret  
+<br>
+```{r}
+
+plot_pred_boot("SNEG", "OUC")
+```
+
+```{r}
+plot_pred_boot("SNEG", "RUR")
+```
+
+```{r include = FALSE}
+plot_pred_boot("SNEG", "NNC")
+```
+
+```{r}
+plot_pred_boot("SNEG", "PNM")
+```
+
+```{r}
+plot_pred_boot("SNEG", "CSF")
+```
+
+```{r}
+plot_pred_boot("SNEG", "SUS")
+```
+
+```{r include = FALSE}
+plot_pred_boot("SNEG", "IEB")
+```
+
+```{r include = FALSE}
+plot_pred_boot("SNEG", "All") 
+
+```
+
+<br>
+<br>
+
+
+Black-crowned Night-Heron  
+<br>
+```{r}
+
+plot_pred_boot("BCNH", "OUC")
+```
+
+```{r}
+plot_pred_boot("BCNH", "RUR")
+```
+
+```{r include = FALSE}
+plot_pred_boot("BCNH", "NNC")
+```
+
+```{r}
+plot_pred_boot("BCNH", "PNM")
+```
+
+```{r}
+plot_pred_boot("BCNH", "CSF")
+```
+
+```{r}
+plot_pred_boot("BCNH", "SUS")
+```
+
+```{r include = FALSE}
+plot_pred_boot("BCNH", "IEB")
+```
+
+```{r}
+plot_pred_boot("BCNH", "All") 
+
+```
+
+<br>
+<br>
+Suisun Great Egret colonies  
+<br>
+
+```{r}
+greg_sus <- analysis_table %>% 
+  right_join(., analysis_table %>% group_by(code, species) %>% count() %>% ungroup() %>% filter(n >= 5)) %>% 
+  filter(species == "GREG", subregion == "SUS") %>% 
+  left_join(hep_sites) %>% 
+  ungroup() %>% 
+  arrange(site.name, year)
+  
+zfac.num <- data.frame(fac.num = rep(c(1, 2, 3, 4), length.out = nrow(distinct(greg_sus, site.name)))) %>% 
+  arrange(fac.num) %>% 
+  bind_cols(distinct(greg_sus, site.name))
+                         
+  
+
+greg_sus %>% 
+  full_join(zfac.num) %>% 
+  mutate(site.name = paste(site.name, " (panel ", fac.num, ")", sep = "")) %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = peakactvnsts, color = site.name)) +
+  labs(y = "Number of nests",
+             x = "Year",
+             color = "") +
+  facet_wrap(~fac.num, scales = "free_y") +
+  theme_bw()
+
+
+
+```
+
+
+
+```{r}
+
+
+trend_coefs <- long_boot %>% 
+  filter(id == "Apparent")
+  
+trend_ci <- long_boot %>% 
+  filter(id != "Apparent") %>% 
+  group_by(code, species) %>% 
+  summarise(uci = quantile(trend.estimate, 0.975),
+            lci = quantile(trend.estimate, 0.025))
+
+
+trend_coefs_ci <-  full_join(trend_coefs, trend_ci) %>% 
+  filter(!species %in% c("DCCO", "CAEG")) %>% 
+  left_join(subreg_key) %>% 
+  ungroup()
+
+trend_coefs_ci %>%
+  filter(species == "GREG", subregion == "SUS") %>% 
+  left_join(colony_weights) %>% 
+  left_join(hep_sites) %>% 
+  ggplot() +
+  geom_point(aes(x = forcats::fct_rev(site.name), y = trend.estimate, size = colony.weight, color = site.name)) +
+  geom_errorbar(aes(x = forcats::fct_rev(site.name), ymax = uci, ymin = lci, color = site.name)) +
+  geom_hline(yintercept = 0) +
+    coord_flip() +
+  labs(x = "",
+       y = "Unweighted trend estimate",
+       size = "Colony weight",
+       color = "") +
+  theme_bw() + 
+  guides(color = "none")
+  
+  
+```

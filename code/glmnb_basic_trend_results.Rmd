@@ -1,0 +1,403 @@
+---
+title: ''
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+date: "`r Sys.Date()`"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      error = FALSE,
+                      fig.width = 7,
+                      fig.height = 5)
+```
+
+
+
+```{r}
+library(tidyverse)
+library(MASS)
+library(birdnames)
+library(here)
+library(flextable)
+library(officer)
+
+
+#source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
+source(here("code/hep_trend_utilities.r"))
+source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
+
+```
+
+```{r}
+# prepare data ----
+hepdata_location = here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")
+# all these functions are in HEP_utility_functions.R
+hep_sites <- hep_sites_from_access(hepdata_location) %>% 
+  dplyr::select(code, parent.code, site.name, parent.site.name, subregion)
+
+options(scipen = 999)
+
+start.year = 1995
+end.year = 2019
+
+sfbbo_nests <- read.csv(here("data/CWB_peak_hep_nest_locs_through_2019.csv")) %>% 
+  mutate(ColonyName = ifelse(ColonyName == "Lake Merced North" & Latitude == 37.728057, "Lake Merced Mesa", ColonyName)) %>% 
+  dplyr::select("site.name" = ColonyName, "species" = SpeciesCode, "year" = SurveyYear, "peakactvnsts" = PeakNumberofNests) %>% 
+  full_join(read.csv(here("data/all_sfbbo_sites_subreg.csv"))) %>% 
+  filter(site.name != "Elmwood Correctional")
+
+analysis_table <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
+  full_join(hep_sites) %>%
+  bind_rows(sfbbo_nests) %>% 
+  filter(!species %in% c("DCCO", "CAEG"), peakactvnsts >= 0, !is.na(year), between(year, start.year, end.year)) %>% 
+  #cut_never_nested() %>% 
+  dplyr::select(year, subregion, code, species, peakactvnsts) 
+
+# calculate a cumulative rain index following Stenzel and Page 2018
+rain_lag <- readRDS(here("data/subreg_rain")) %>% 
+  dplyr::select(year = birdyear, subregion, subreg.name, subreg.rain) %>%
+  data.frame() %>% 
+  arrange(subregion, year) %>% 
+  group_by(subregion) %>% 
+  mutate(subreg.rain = subreg.rain + (lag(subreg.rain)/2) + (lag(subreg.rain, 2)/3))
+  
+trend_analysis_table1 <- analysis_table  %>%
+  group_by(year, subregion, species) %>% 
+  summarise(tot.nests = sum(peakactvnsts)) %>% 
+  ungroup() %>% 
+  bind_rows(analysis_table %>% # add duplicate of all data with subregion set to "All" 
+              group_by(year, species) %>%
+              summarise(tot.nests = sum(peakactvnsts)) %>%
+              ungroup() %>%
+              mutate(subregion = "All")) %>% 
+    full_join(expand.grid(species = distinct(analysis_table, species)$species,
+                          year = seq(start.year, end.year, by = 1),
+                          subregion = subreg_key$subregion)) %>% 
+    mutate(tot.nests = ifelse(is.na(tot.nests), 0, tot.nests))
+
+
+start_end_years <- trend_analysis_table1 %>% 
+  filter(tot.nests > 0) %>% 
+  group_by(subregion, species) %>% 
+  summarise(spp.sub.start.year = min(year) - 1,
+            spp.sub.end.year = max(year) + 1) %>% 
+  ungroup() %>% 
+  mutate(spp.sub.start.year = ifelse(spp.sub.start.year < start.year, start.year, spp.sub.start.year),
+         spp.sub.end.year = ifelse(spp.sub.end.year > end.year, end.year, spp.sub.end.year))
+
+spp_subreg_nyears <- trend_analysis_table1 %>%
+  filter(tot.nests > 0) %>% 
+  group_by(subregion, species) %>% 
+  summarise(nyears = n())
+  
+
+
+# for mapping through species and subregions
+spp_subreg <- trend_analysis_table1 %>% 
+  right_join(spp_subreg_nyears %>% filter(nyears >= 5) %>% dplyr::select(-nyears)) %>% 
+  distinct(species, subregion) %>% 
+  mutate(spp.subreg = paste(species, subregion, sep = "_"))
+
+
+trend_analysis_table <- trend_analysis_table1 %>% 
+  full_join(start_end_years) %>% 
+  mutate(zkeep = ifelse(year >= spp.sub.start.year & year <= spp.sub.end.year, TRUE, FALSE)) %>% 
+  arrange(subregion, species, year) %>% 
+  filter(zkeep == TRUE) %>% 
+  dplyr::select(-zkeep) %>% 
+  left_join(rain_lag) 
+
+```
+
+
+```{r}
+
+spp_subreg_mods <- map2(spp_subreg$species, spp_subreg$subregion, fit_mods_glmbn_year2)
+names(spp_subreg_mods) <- spp_subreg$spp.subreg
+
+#spp_subreg_mods$SNEG_SUS = fit_mods_glmbn("SNEG", "SUS")
+
+
+```
+
+
+```{r}
+
+preds <- map2_df(spp_subreg_mods, names(spp_subreg_mods), get_preds_glmnb)
+#coef_ci <- map2_df(spp_subreg_mods, names(spp_subreg_mods), get_coefs_cis)
+
+```
+
+```{r}
+
+
+plot_pred_comparison <- function(zspp) {
+  raw_dat <- trend_analysis_table1 %>% 
+    filter(species == zspp) %>% 
+    dplyr::select(species, subregion, year, tot.nests)
+
+  pred_dat <- preds %>% 
+    filter(species == zspp) %>% 
+    full_join(raw_dat) %>% 
+    full_join(subreg_key) 
+
+mod_pred_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = estimate), size = 0.5) +
+  geom_ribbon(aes(x = year, ymin = lci, ymax = uci), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests), size = 0.5)  + 
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.1))))) +
+  facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Nest abundance",
+       x = "Year",
+       title = "") +
+  theme_bw() +
+  theme(text = element_text(size=8))
+
+ggsave(paste("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_pred_plot_", zspp, ".png", sep = ""), mod_pred_plot, width = 7, height = 5, dpi = 300)
+
+mod_pred_plot
+
+}
+
+```
+
+
+```{r}
+pred_table_start <- preds %>% 
+  group_by(species, subregion) %>% 
+  mutate(keep.year = case_when(year == min(year) ~ "min.year",
+                               year == max(year) ~ "max.year",
+                               estimate == max(estimate) ~ "max.estimate")) %>% 
+  ungroup() %>% 
+  filter(!is.na(keep.year)) %>% 
+  mutate(across(c(estimate, lci, uci), ~round(., 0)),
+         out.estimate = paste(estimate, " (", lci, "-", uci, ")", sep = "")) 
+
+per_change <- pred_table_start  %>% 
+  filter(keep.year != "max.estimate") %>% 
+  pivot_wider(id_cols = c(species, subregion), names_from = keep.year, values_from = estimate) %>% 
+  mutate(abs.change = max.year - min.year,
+         per.change = ((max.year/min.year) - 1) * 100,
+         per.change = round(per.change, 1)) %>% 
+  dplyr::select(species, subregion, per.change, abs.change)
+  
+
+pred_table_est <- pred_table_start %>% 
+  mutate(keep.year = paste("est.", keep.year, sep = "")) %>% 
+  pivot_wider(id_cols = c(species, subregion), names_from = keep.year, values_from = out.estimate)
+
+pred_table_years <- pred_table_start  %>% 
+  mutate(year = as.character(year))%>% 
+  pivot_wider(id_cols = c(species, subregion), names_from = keep.year, values_from = year)
+
+pred_table <- full_join(pred_table_est, pred_table_years) %>% 
+  full_join(subreg_key) %>% 
+  full_join(per_change) %>% 
+  arrange(species, subreg.name)
+
+write.csv(pred_table, here("output/trend_model_predictions.csv"), row.names = FALSE)
+
+```
+
+```{r}
+
+max_min_per_change <- pred_table %>%
+  filter(per.change != Inf & per.change != -Inf, subregion != "All") %>%
+  dplyr::select(species, subreg.name, contains("min.year"), contains("max.year"), per.change) %>%  
+  group_by(species) %>% 
+  mutate(max.per.change = per.change == max(per.change),
+         min.per.change = per.change == min(per.change)) %>% 
+  ungroup() %>% 
+  filter(max.per.change == TRUE | min.per.change == TRUE)
+
+max_min_abs_change <- pred_table %>%
+filter(subregion != "All") %>% 
+  dplyr::select(species, subreg.name, contains("min.year"), contains("max.year"), abs.change) %>%  
+  group_by(species) %>% 
+  mutate(max.abs.change = abs.change == max(abs.change),
+         min.abs.change = abs.change == min(abs.change)) %>% 
+  ungroup() %>% 
+  filter(max.abs.change == TRUE | min.abs.change == TRUE)
+
+
+
+make_change_text <- function(zspp) {
+  per_increase_spp <- filter(max_min_per_change, species == zspp, max.per.change == TRUE)
+  abs_increase_spp <- filter(max_min_abs_change, species == zspp, max.abs.change == TRUE)
+  per_decrease_spp <- filter(max_min_per_change, species == zspp, min.per.change == TRUE)
+  abs_decrease_spp <- filter(max_min_abs_change, species == zspp, min.abs.change == TRUE)
+  
+
+  change_text <- paste("For ", translate_bird_names(zspp, "alpha.code", "common.name"), 
+  " (Table XXX), the largest percent increase was observed in ", per_increase_spp$subreg.name, " where abundance went from ",
+  per_increase_spp$est.min.year, " nests in ", per_increase_spp$min.year, 
+  " to ", per_increase_spp$est.max.year, " nests in ", per_increase_spp$max.year, ". The largest absolute increase was observed in ",
+  abs_increase_spp$subreg.name, " where abundance increased by ", abs_increase_spp$abs.change, " nests.", 
+  # decrease
+  " The largest percent decrease in ", translate_bird_names(zspp, "alpha.code", "common.name"), " nest abundance was in ",
+  per_decrease_spp$subreg.name, " where nesting abundance decreased from ",
+  per_decrease_spp$est.min.year,  " nests in ", per_decrease_spp$min.year, 
+  " to ", per_decrease_spp$est.max.year, " nests in ", per_decrease_spp$max.year, ". The largest absolute decrease was observed in ",
+  abs_decrease_spp$subreg.name, " where abundance dropped by ", -1 * abs_decrease_spp$abs.change, " nests.",
+  sep = "")
+  
+ return(change_text) 
+  
+}
+```
+
+
+
+
+
+```{r}
+make_spp_tab <- function(zspp) {
+  ztable <- filter(pred_table, species == zspp) %>% 
+    full_join(subreg_key %>% dplyr::select(subreg.name)) %>% 
+    arrange(subreg.name) %>% 
+    mutate(break1 = "",
+           subreg.name = ifelse(is.na(min.year), paste(subreg.name, "*", sep = ""), as.character(subreg.name))) %>% 
+    dplyr::select(subreg.name, min.year, est.min.year, break1, max.year, est.max.year, per.change, -species)
+  
+  #zfoots <- sprintf("%.0f", which(is.na(ztable$min.year)))
+  
+    flextable(ztable) %>%
+    add_header_row(values = c("", "First year observed", "", 
+                              "Final year observed", ""), colwidths = c(1, 2, 1, 2, 1)) %>%
+    set_header_labels(subreg.name = "Subregion",
+                    min.year = "Year",
+                    est.min.year = "Estimate (95% CI)",
+                    break1 = "",
+                    max.year = "Year",
+                    est.max.year = "Estimate (95% CI)",
+                    per.change = "% change") %>%
+    align(j = 2:7, align = "center", part = "all") %>%
+    border_remove() %>%
+    border(i = 1, border.top = fp_border(color = "black"), part = "header") %>%
+    #border(i = 2, border.bottom = fp_border(color = "black"), part = "header") %>%
+    #hline_top(part = "body") %>%
+    hline_bottom(part = "body") %>%
+    fit_to_width(max_width = 8.5) %>% 
+    width(j = c(1, 3, 6), width = 1.5) %>% 
+    width(j = c(2, 5), width = .5) %>% 
+    width(j = 7, width = 1) %>% 
+      width(j = 4, width = 0.1) %>% 
+     # footnote(i = 1, j = 1, value = as_paragraph(c("Data insufficient to model")), part = "body") %>% 
+    set_caption(caption = paste("Changes in number of observed ", translate_bird_names(zspp, "alpha.code", "common.name"), " nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the first and last years a species was observed nesting, the estimated nest abundance and 95% Confidence interval, and the percent change from the first to final year."))
+}
+
+```
+
+`r make_change_text("GREG")`
+
+```{r}
+make_spp_tab("GREG")
+```
+
+<br>  
+<br>  
+
+`r make_change_text("GBHE")`
+
+<br>
+```{r}
+make_spp_tab("GBHE")
+```
+
+<br>  
+<br>  
+
+`r make_change_text("SNEG")`
+
+<br>
+
+```{r}
+make_spp_tab("SNEG")
+```
+
+<br>  
+<br>  
+
+
+`r make_change_text("BCNH")` 
+
+<br>
+
+```{r}
+make_spp_tab("BCNH")
+```
+
+
+Figures
+
+```{r}
+
+analysis_table %>% 
+  filter(peakactvnsts > 0, !is.na(species)) %>% 
+  group_by(subregion, species, year) %>% 
+  summarise(n.colonies = n()) %>% 
+  left_join(subreg_key) %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = n.colonies, color = translate_bird_names(species, "alpha.code", "common.name")))  + 
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.1))))) +
+  facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Number of colonies with \u2265 1 nest",
+       x = "Year",
+       color = "") +
+  theme_bw() +
+  theme(text = element_text(size=8))
+
+
+ggsave("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/n_colonies.png", width = 7, height = 5, dpi = 300)
+
+```
+
+<br>  
+<br>  
+Great Egret
+```{r}
+
+plot_pred_comparison("GREG")
+
+```
+
+<br>  
+<br>  
+
+Great Blue Heron
+```{r}
+
+plot_pred_comparison("GBHE")
+
+```
+
+
+<br>  
+<br>  
+Snowy Egret
+```{r}
+
+plot_pred_comparison("SNEG")
+
+```
+
+<br>  
+<br>  
+
+Black-crowned Hight-Heron
+```{r}
+
+plot_pred_comparison("BCNH")
+
+```
+
+
