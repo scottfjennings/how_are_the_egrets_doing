@@ -1,0 +1,654 @@
+---
+title: ''
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+date: "`r Sys.Date()`"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      error = FALSE,
+                      fig.width = 7,
+                      fig.height = 5)
+```
+
+
+
+```{r}
+library(tidyverse)
+library(cowplot)
+library(gtable)
+library(grid)
+library(MASS)
+library(birdnames)
+library(here)
+library(flextable)
+library(officer)
+
+
+#source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
+source(here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/code/ms_analysis/hep_trend_utilities.r"))
+source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
+
+```
+
+```{r}
+# prepare data ----
+hepdata_location = here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")
+# all these functions are in HEP_utility_functions.R
+hep_sites <- hep_sites_from_access(hepdata_location) %>% 
+  dplyr::select(code, parent.code, site.name, parent.site.name, subregion)
+
+options(scipen = 999)
+
+start.year = 1995
+end.year = 2019
+
+sfbbo_nests <- read.csv(here("data/CWB_peak_hep_nest_locs_through_2019.csv")) %>% 
+  mutate(ColonyName = ifelse(ColonyName == "Lake Merced North" & Latitude == 37.728057, "Lake Merced Mesa", ColonyName)) %>% 
+  dplyr::select("site.name" = ColonyName, "species" = SpeciesCode, "year" = SurveyYear, "peakactvnsts" = PeakNumberofNests) %>% 
+  full_join(read.csv(here("data/all_sfbbo_sites_subreg.csv"))) %>% 
+  filter(site.name != "Elmwood Correctional")
+
+analysis_table <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
+  full_join(hep_sites) %>%
+  bind_rows(sfbbo_nests) %>% 
+  filter(!species %in% c("DCCO", "CAEG"), peakactvnsts >= 0, !is.na(year), between(year, start.year, end.year)) %>% 
+  #cut_never_nested() %>% 
+  dplyr::select(year, subregion, code, species, peakactvnsts) 
+
+# calculate a cumulative rain index following Stenzel and Page 2018
+rain_lag <- readRDS(here("data/subreg_rain")) %>% 
+  dplyr::select(year = birdyear, subregion, subreg.name, subreg.rain) %>%
+  data.frame() %>% 
+  arrange(subregion, year) %>% 
+  group_by(subregion) %>% 
+  mutate(subreg.rain = subreg.rain + (lag(subreg.rain)/2) + (lag(subreg.rain, 2)/3))
+  
+trend_analysis_table1 <- analysis_table  %>%
+  group_by(year, subregion, species) %>% 
+  summarise(tot.nests = sum(peakactvnsts)) %>% 
+  ungroup() %>% 
+  bind_rows(analysis_table %>% # add duplicate of all data with subregion set to "All" 
+              group_by(year, species) %>%
+              summarise(tot.nests = sum(peakactvnsts)) %>%
+              ungroup() %>%
+              mutate(subregion = "All")) %>% 
+    full_join(expand.grid(species = distinct(analysis_table, species)$species,
+                          year = seq(start.year, end.year, by = 1),
+                          subregion = subreg_key$subregion)) %>% 
+    mutate(tot.nests = ifelse(is.na(tot.nests), 0, tot.nests))
+
+
+start_end_years <- trend_analysis_table1 %>% 
+  filter(tot.nests > 0) %>% 
+  group_by(subregion, species) %>% 
+  summarise(spp.sub.start.year = min(year) - 1,
+            spp.sub.end.year = max(year) + 1) %>% 
+  ungroup() %>% 
+  mutate(spp.sub.start.year = ifelse(spp.sub.start.year < start.year, start.year, spp.sub.start.year),
+         spp.sub.end.year = ifelse(spp.sub.end.year > end.year, end.year, spp.sub.end.year))
+
+spp_subreg_nyears <- trend_analysis_table1 %>%
+  filter(tot.nests > 0) %>% 
+  group_by(subregion, species) %>% 
+  summarise(nyears = n())
+  
+
+
+# for mapping through species and subregions
+spp_subreg <- trend_analysis_table1 %>% 
+  right_join(spp_subreg_nyears %>% filter(nyears >= 5) %>% dplyr::select(-nyears)) %>% 
+  distinct(species, subregion) %>% 
+  mutate(spp.subreg = paste(species, subregion, sep = "_"))
+
+
+trend_analysis_table <- trend_analysis_table1 %>% 
+  full_join(start_end_years) %>% 
+  mutate(zkeep = ifelse(year >= spp.sub.start.year & year <= spp.sub.end.year, TRUE, FALSE)) %>% 
+  arrange(subregion, species, year) %>% 
+  filter(zkeep == TRUE) %>% 
+  dplyr::select(-zkeep) %>% 
+  left_join(rain_lag) 
+
+
+
+n_colonies <- analysis_table %>% 
+  filter(peakactvnsts > 0, !is.na(species)) %>% 
+  group_by(subregion, species, year) %>% 
+  summarise(n.colonies = n()) %>% 
+  left_join(subreg_key) 
+
+
+```
+
+
+```{r}
+
+spp_subreg_mods <- map2(spp_subreg$species, spp_subreg$subregion, fit_mods_glmbn_year2)
+names(spp_subreg_mods) <- spp_subreg$spp.subreg
+
+#spp_subreg_mods$SNEG_SUS = fit_mods_glmbn("SNEG", "SUS")
+
+
+```
+
+
+```{r}
+
+preds <- map2_df(spp_subreg_mods, names(spp_subreg_mods), get_preds_glmnb)
+coef_ci <- map2_df(spp_subreg_mods, names(spp_subreg_mods), get_coefs_cis)
+
+
+```
+
+```{r}
+# from https://stackoverflow.com/questions/54438495/shift-legend-into-empty-facets-of-a-faceted-plot-in-ggplot2
+# move legend to free facet spot
+
+shift_legend <- function(p){
+
+  # check if p is a valid object
+  if(!"gtable" %in% class(p)){
+    if("ggplot" %in% class(p)){
+      gp <- ggplotGrob(p) # convert to grob
+    } else {
+      message("This is neither a ggplot object nor a grob generated from ggplotGrob. Returning original plot.")
+      return(p)
+    }
+  } else {
+    gp <- p
+  }
+
+  # check for unfilled facet panels
+  facet.panels <- grep("^panel", gp[["layout"]][["name"]])
+  empty.facet.panels <- sapply(facet.panels, function(i) "zeroGrob" %in% class(gp[["grobs"]][[i]]))
+  empty.facet.panels <- facet.panels[empty.facet.panels]
+  if(length(empty.facet.panels) == 0){
+    message("There are no unfilled facet panels to shift legend into. Returning original plot.")
+    return(p)
+  }
+
+  # establish extent of unfilled facet panels (including any axis cells in between)
+  empty.facet.panels <- gp[["layout"]][empty.facet.panels, ]
+  empty.facet.panels <- list(min(empty.facet.panels[["t"]]), min(empty.facet.panels[["l"]]),
+                             max(empty.facet.panels[["b"]]), max(empty.facet.panels[["r"]]))
+  names(empty.facet.panels) <- c("t", "l", "b", "r")
+
+  # extract legend & copy over to location of unfilled facet panels
+  guide.grob <- which(gp[["layout"]][["name"]] == "guide-box")
+  if(length(guide.grob) == 0){
+    message("There is no legend present. Returning original plot.")
+    return(p)
+  }
+  gp <- gtable_add_grob(x = gp,
+                        grobs = gp[["grobs"]][[guide.grob]],
+                        t = empty.facet.panels[["t"]],
+                        l = empty.facet.panels[["l"]],
+                        b = empty.facet.panels[["b"]],
+                        r = empty.facet.panels[["r"]],
+                        name = "new-guide-box")
+
+  # squash the original guide box's row / column (whichever applicable)
+  # & empty its cell
+  guide.grob <- gp[["layout"]][guide.grob, ]
+  if(guide.grob[["l"]] == guide.grob[["r"]]){
+    gp <- gtable_squash_cols(gp, cols = guide.grob[["l"]])
+  }
+  if(guide.grob[["t"]] == guide.grob[["b"]]){
+    gp <- gtable_squash_rows(gp, rows = guide.grob[["t"]])
+  }
+  gp <- gtable_remove_grobs(gp, "guide-box")
+
+  return(gp)
+}
+
+```
+
+
+```{r}
+
+
+plot_pred_comparison <- function(zspp) {
+  raw_dat <- trend_analysis_table1 %>% 
+    filter(species == zspp) %>% 
+    dplyr::select(species, subregion, year, tot.nests)
+
+
+  
+  pred_dat <- preds %>% 
+    filter(species == zspp) %>% 
+    full_join(raw_dat) %>% 
+    full_join(subreg_key) %>% 
+    group_by(subregion, species) %>% 
+    mutate(text.y = ceiling(max(tot.nests) * 1.1))
+
+  
+mod_pred_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = estimate), size = 0.5) +
+  geom_ribbon(aes(x = year, ymin = lci, ymax = uci), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests), size = 0.5)  + 
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.3))))) +
+  facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Nest abundance",
+       x = "Year",
+       title = "") +
+  theme_bw() +
+  theme(text = element_text(size=8))
+
+ggsave(paste("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_pred_plot_", zspp, ".png", sep = ""), mod_pred_plot, width = 7, height = 5, dpi = 300)
+
+mod_pred_plot
+
+}
+
+```
+
+
+```{r}
+pred_table_start <- preds %>% 
+  group_by(species, subregion) %>% 
+  mutate(keep.year = case_when(year == min(year) ~ "first.year",
+                               year == max(year) ~ "last.year",
+                               estimate == max(estimate) ~ "maxest.year")) %>% 
+  ungroup() %>% 
+  filter(!is.na(keep.year)) %>% 
+  mutate(across(c(estimate, lci, uci), ~round(., 0)),
+         out.estimate = paste(estimate, " (", lci, "-", uci, ")", sep = "")) 
+
+per_change <- pred_table_start  %>% 
+  filter(keep.year != "maxest.year") %>% 
+  pivot_wider(id_cols = c(species, subregion), names_from = keep.year, values_from = estimate) %>% 
+  mutate(abs.change = last.year - first.year,
+         per.change = ((last.year/first.year) - 1) * 100,
+         per.change = round(per.change, 1)) %>% 
+  dplyr::select(species, subregion, per.change, abs.change)
+  
+
+pred_table_est <- pred_table_start %>% 
+  mutate(keep.year = paste("est.", keep.year, sep = "")) %>% 
+  pivot_wider(id_cols = c(species, subregion), names_from = keep.year, values_from = out.estimate)
+
+pred_table_years <- pred_table_start  %>% 
+  mutate(year = as.character(year))%>% 
+  pivot_wider(id_cols = c(species, subregion), names_from = keep.year, values_from = year)
+
+pred_table <- full_join(pred_table_est, pred_table_years) %>% 
+  full_join(subreg_key) %>% 
+  full_join(per_change) %>% 
+  arrange(species, subreg.name)
+
+write.csv(pred_table, here("output/trend_model_predictions.csv"), row.names = FALSE)
+
+```
+
+```{r}
+
+max_min_per_change <- pred_table %>%
+  filter(per.change != Inf & per.change != -Inf, subregion != "All") %>%
+  dplyr::select(species, subreg.name, contains("first.year"), contains("last.year"), per.change) %>%  
+  group_by(species) %>% 
+  mutate(max.per.change = per.change == max(per.change),
+         min.per.change = per.change == min(per.change)) %>% 
+  ungroup() %>% 
+  filter(max.per.change == TRUE | min.per.change == TRUE)
+
+max_min_abs_change <- pred_table %>%
+filter(subregion != "All") %>% 
+  dplyr::select(species, subreg.name, contains("first.year"), contains("last.year"), abs.change) %>%  
+  group_by(species) %>% 
+  mutate(max.abs.change = abs.change == max(abs.change),
+         min.abs.change = abs.change == min(abs.change)) %>% 
+  ungroup() %>% 
+  filter(max.abs.change == TRUE | min.abs.change == TRUE)
+
+
+
+make_change_text <- function(zspp) {
+  per_increase_spp <- filter(max_min_per_change, species == zspp, max.per.change == TRUE)
+  abs_increase_spp <- filter(max_min_abs_change, species == zspp, max.abs.change == TRUE)
+  per_decrease_spp <- filter(max_min_per_change, species == zspp, min.per.change == TRUE)
+  abs_decrease_spp <- filter(max_min_abs_change, species == zspp, min.abs.change == TRUE)
+  
+
+  change_text <- paste("For ", translate_bird_names(zspp, "alpha.code", "common.name"), 
+  " (Table XXX), the largest percent increase was observed in ", per_increase_spp$subreg.name, " where abundance went from ",
+  per_increase_spp$est.first.year, " nests in ", per_increase_spp$first.year, 
+  " to ", per_increase_spp$est.last.year, " nests in ", per_increase_spp$last.year, ". The largest absolute increase was observed in ",
+  abs_increase_spp$subreg.name, " where abundance increased by ", abs_increase_spp$abs.change, " nests.", 
+  # decrease
+  " The largest percent decrease in ", translate_bird_names(zspp, "alpha.code", "common.name"), " nest abundance was in ",
+  per_decrease_spp$subreg.name, " where nesting abundance decreased from ",
+  per_decrease_spp$est.first.year,  " nests in ", per_decrease_spp$first.year, 
+  " to ", per_decrease_spp$est.last.year, " nests in ", per_decrease_spp$last.year, ". The largest absolute decrease was observed in ",
+  abs_decrease_spp$subreg.name, " where abundance dropped by ", -1 * abs_decrease_spp$abs.change, " nests.",
+  sep = "")
+  
+ return(change_text) 
+  
+}
+```
+
+
+
+
+
+```{r}
+make_spp_tab <- function(zspp) {
+  ztable <- filter(pred_table, species == zspp) %>% 
+    full_join(subreg_key %>% dplyr::select(subreg.name)) %>% 
+    arrange(subreg.name) %>% 
+    mutate(break1 = "",
+           subreg.name = ifelse(is.na(first.year), paste(subreg.name, "*", sep = ""), as.character(subreg.name))) %>% 
+    dplyr::select(subreg.name, first.year, est.first.year, break1, last.year, est.last.year, per.change, -species)
+  
+  #zfoots <- sprintf("%.0f", which(is.na(ztable$first.year)))
+  
+    flextable(ztable) %>%
+    add_header_row(values = c("", "First year observed", "", 
+                              "Final year observed", ""), colwidths = c(1, 2, 1, 2, 1)) %>%
+    set_header_labels(subreg.name = "Subregion",
+                    first.year = "Year",
+                    est.first.year = "Estimate (95% CI)",
+                    break1 = "",
+                    last.year = "Year",
+                    est.last.year = "Estimate (95% CI)",
+                    per.change = "% change") %>%
+    align(j = 2:7, align = "center", part = "all") %>%
+    border_remove() %>%
+    border(i = 1, border.top = fp_border(color = "black"), part = "header") %>%
+    #border(i = 2, border.bottom = fp_border(color = "black"), part = "header") %>%
+    #hline_top(part = "body") %>%
+    hline_bottom(part = "body") %>%
+    fit_to_width(max_width = 8.5) %>% 
+    width(j = c(1, 3, 6), width = 1.5) %>% 
+    width(j = c(2, 5), width = .5) %>% 
+    width(j = 7, width = 1) %>% 
+      width(j = 4, width = 0.1) %>% 
+     # footnote(i = 1, j = 1, value = as_paragraph(c("Data insufficient to model")), part = "body") %>% 
+    set_caption(caption = paste("Changes in number of observed ", translate_bird_names(zspp, "alpha.code", "common.name"), " nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the first and last years a species was observed nesting, the estimated nest abundance and 95% Confidence interval, and the percent change from the first to final year."))
+}
+
+```
+
+`r make_change_text("GREG")`
+
+```{r}
+make_spp_tab("GREG")
+```
+
+<br>  
+<br>  
+
+`r make_change_text("GBHE")`
+
+<br>
+```{r}
+make_spp_tab("GBHE")
+```
+
+<br>  
+<br>  
+
+`r make_change_text("SNEG")`
+
+<br>
+
+```{r}
+make_spp_tab("SNEG")
+```
+
+<br>  
+<br>  
+
+
+`r make_change_text("BCNH")` 
+
+<br>
+
+```{r}
+make_spp_tab("BCNH")
+```
+
+
+Figures
+
+Figure XXX. Number of active (≥1 nest) heron and egret colonies monitored in each subregion in the San Francisco Bay Area, 1995-2019. 
+```{r}
+
+
+  num_cols_plot <- ggplot(n_colonies) +
+  geom_line(aes(x = year, y = n.colonies, color = translate_bird_names(species, "alpha.code", "common.name")))  + 
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.1))))) +
+  facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Number of colonies with \u2265 1 nest",
+       x = "Year",
+       color = "") +
+  theme_bw() +
+  theme(text = element_text(size=8))
+
+grid.draw(shift_legend(num_cols_plot))
+
+
+ggsave("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/n_colonies.png", width = 7, height = 5, dpi = 300)
+
+```
+
+<br>  
+<br>  
+
+Figure XXX. Changes in nest abundance of Great Egret by subregion in the San Francisco Bay Area, 1995-2019. Shown are the estimated mean abundance (line) and 95% Confidence interval (gray ribbon) from a generalize linear model and the raw data (dots) the models were fitted to.
+
+```{r}
+
+plot_pred_comparison("GREG")
+
+```
+
+<br>  
+<br>  
+
+
+Figure XXX. Changes in nest abundance of Great Blue Heron by subregion in the San Francisco Bay Area, 1995-2019. Shown are the estimated mean abundance (line) and 95% Confidence interval (gray ribbon) from a generalize linear model and the raw data (dots) the models were fitted to.
+
+```{r}
+
+plot_pred_comparison("GBHE")
+
+```
+
+
+<br>  
+<br>  
+
+Figure XXX. Changes in nest abundance of Snowy Egret by subregion in the San Francisco Bay Area, 1995-2019. Shown are the estimated mean abundance (line) and 95% Confidence interval (gray ribbon) from a generalize linear model and the raw data (dots) the models were fitted to.
+```{r}
+
+plot_pred_comparison("SNEG")
+
+```
+
+<br>  
+<br>  
+
+
+Figure XXX. Changes in nest abundance of Black-crowned Night-Heron by subregion in the San Francisco Bay Area, 1995-2019. Shown are the estimated mean abundance (line) and 95% Confidence interval (gray ribbon) from a generalize linear model and the raw data (dots) the models were fitted to.
+```{r}
+
+plot_pred_comparison("BCNH")
+
+```
+
+
+
+Figure XXX. Absolute and percent changes in the number of observed heron and egret nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the change from the first to last years a species was observed nesting. All estimates are extracted from the fit of a genralized linear model.
+```{r}
+change_mag <- pred_table %>% 
+  dplyr:: select(subreg.name, species, contains("change")) %>% 
+  full_join(expand.grid(species = distinct(pred_table, species)$species,
+                        subreg.name = distinct(pred_table, subreg.name)$subreg.name)) %>% 
+  pivot_longer(cols = contains("change"), names_to = "change.type", values_to = "change") %>% 
+  mutate(change = ifelse(is.na(change), 0, change),
+         species = translate_bird_names(species, "alpha.code", "common.name"),
+         change.type = ifelse(change.type == "abs.change", "Absolute change", "Percent change")) %>% 
+  ggplot(aes(x = species, y = change, fill = species))  + 
+  geom_bar(position="dodge", stat="identity") +
+  geom_hline(yintercept = 0) +
+  facet_grid(subreg.name~change.type, scales = "free", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(x = "",
+       y = "Change magnitude",
+       fill = "") +
+  theme_bw() +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        strip.text.y.right = element_text(angle = 0))
+
+
+ggsave("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/change_magnitude.png", width = 7, height = 7, dpi = 300)
+
+change_mag
+```
+
+
+
+```{r}
+pred_table_start %>% 
+  filter(keep.year %in% c("first.year", "last.year")) %>% 
+  dplyr::select(subregion, species, keep.year, estimate) %>% 
+  pivot_wider(names_from = keep.year, values_from = estimate) %>% 
+  mutate(change = last.year - first.year,
+         out.change = paste(change, " (", first.year, ", ", last.year, ")", sep = ""),
+         species = translate_bird_names(species, "alpha.code", "common.name")) %>% 
+  full_join(subreg_key) %>%
+  dplyr::select(subreg.name, species, out.change) %>% 
+  pivot_wider(names_from = species, values_from = out.change) %>% 
+  arrange(subreg.name) %>%
+  dplyr::select("subreg.name", "Great Egret", "Great Blue Heron", "Snowy Egret", "Black-crowned Night-Heron") %>% 
+  flextable() %>% 
+  set_header_labels(subreg.name = "") %>% 
+  width(j = 1, width = 1.75) %>%  
+  width(j = 2:5, width = 1.25) %>% 
+  fit_to_width(max_width = 7.5) %>% 
+    set_caption(caption = paste("Changes in absolute number of observed heron and egret nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the change in number of nests from the first to last years a species was observed nesting, and in parentheses the values in the first and last years. All estimates are extracted from the fit of a genralized linear model."))
+
+```
+
+
+
+
+```{r}
+pred_table_start %>% 
+  filter(keep.year %in% c("first.year", "last.year")) %>% 
+  dplyr::select(subregion, species, keep.year, estimate) %>% 
+  pivot_wider(names_from = keep.year, values_from = estimate) %>% 
+  mutate(change = ((last.year/first.year) - 1) * 100,
+         out.change = paste(round(change, 1), " (", first.year, ", ", last.year, ")", sep = ""),
+         species = translate_bird_names(species, "alpha.code", "common.name")) %>% 
+  full_join(subreg_key) %>%
+  dplyr::select(subreg.name, species, out.change) %>% 
+  pivot_wider(names_from = species, values_from = out.change) %>% 
+  arrange(subreg.name) %>%
+  dplyr::select("subreg.name", "Great Egret", "Great Blue Heron", "Snowy Egret", "Black-crowned Night-Heron") %>% 
+  flextable() %>% 
+  set_header_labels(subreg.name = "") %>% 
+  width(j = 1, width = 1.75) %>%  
+  width(j = 2:5, width = 1.25) %>% 
+  fit_to_width(max_width = 7.5) %>% 
+    set_caption(caption = paste("Changes in number of observed heron and egret nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the percent change in number of nests from the first to last years a species was observed nesting, and in parentheses the values in the first and last years. All estimates are extracted from the fit of a genralized linear model."))
+
+```
+
+
+
+Figure xxx. Effect of rainfall (previous 3 years cumulative) on number of observed heron and egret nests in each subregion in the San Francisco Bay Area, 1995-2019. 
+```{r}
+rain_effect <- coef_ci %>% 
+filter(varb == "subreg.rain", !is.na(coef)) %>% 
+  full_join(expand.grid(species = distinct(coef_ci, species)$species,
+                        subregion = distinct(coef_ci, subregion)$subregion)) %>% 
+  full_join(subreg_key) %>% 
+  mutate(species = translate_bird_names(species, "alpha.code", "common.name"),
+         coef = ifelse(is.na(coef), 0, coef)) %>%
+ggplot(aes(x = species, y = coef, fill = species))  + 
+  geom_bar(position="dodge", stat="identity") +
+  facet_wrap(~subreg.name, scales = "free", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(x = "",
+       y = "Rain effect",
+       fill = "") +
+  theme_bw() +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        strip.text.y.right = element_text(angle = 0))+
+  theme(text = element_text(size=8))
+
+
+
+ggsave("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/rain_effect.png", width = 7, height = 7, dpi = 300)
+
+
+
+grid.draw(shift_legend(rain_effect))
+
+```
+
+
+
+Results of sensitivity analysis
+
+```{r}
+
+make_sensitivity_plot <- function(zspp) {
+   pred_dat <- preds %>%  
+    full_join(subreg_key) %>% 
+    filter(species == zspp, subregion != "All")
+   
+   bootz <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/output/sensitivity_bootz") %>% 
+     full_join(subreg_key) %>% 
+     filter(species == zspp, subregion != "All")
+   
+   
+  
+sensitivity_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(data = pred_dat, aes(x = year, y = estimate), size = 0.5) +
+  geom_ribbon(data = bootz, aes(x = year, ymin = lci, ymax = uci), alpha = 0.25) +
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  #scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.3))))) +
+  facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Nest abundance",
+       x = "Year",
+       title = "") +
+  theme_bw() +
+  theme(text = element_text(size=8))
+
+ggsave(paste("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/sensitivity_plot_", zspp, ".png", sep = ""), sensitivity_plot, width = 7, height = 5, dpi = 300)
+
+sensitivity_plot
+
+}
+
+
+```
+
+Figure XXX. Results of analysis testing sensitivity of estimates of Great Egret nesting abundance to missing data, by subregion in the San Francisco Bay Area, 1995-2019. The analysis consisted of randomly removing 5% of the annual colony-level observations, refitting the model used in the main analysis, and extracting model predictions as in the main analysis. This process was repeated 1000 times, and 95% confidence intervals for the bootstrapped model predictions were generated. These 95% CI are shown in gray, and the main analysis model predictions (using all the data) are shown by the black line.
+```{r}
+make_sensitivity_plot("GREG")
+
+```
+
+
+Figure XXX. Results of analysis testing sensitivity of estimates of Great Blue Heron nesting abundance to missing data, by subregion in the San Francisco Bay Area, 1995-2019. The analysis consisted of randomly removing 5% of the annual colony-level observations, refitting the model used in the main analysis, and extracting model predictions as in the main analysis. This process was repeated 1000 times, and 95% confidence intervals for the bootstrapped model predictions were generated. These 95% CI are shown in gray, and the main analysis model predictions (using all the data) are shown by the black line.
+```{r}
+
+
+make_sensitivity_plot("GBHE")
+
+```

@@ -128,7 +128,7 @@ get_coefs_cis <- function(zmod, zmod.name) {
   spp_subreg <- zmod.name %>% 
     data.frame() %>% 
     rename(spp.subreg = 1) %>% 
-    separate(spp.subreg, into = c("species", "subregion"))
+    separate(spp.subreg, into = c("species", "subregion"), sep = "_")
   
   coefs <- coef(zmod) %>%
     data.frame() %>% 
