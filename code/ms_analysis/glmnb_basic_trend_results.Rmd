@@ -32,7 +32,7 @@ library(officer)
 
 
 #source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
-source(here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/code/ms_analysis/hep_trend_utilities.r"))
+source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/hep_trend_utilities.r")
 source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
 
 ```
@@ -53,10 +53,11 @@ sfbbo_nests <- read.csv(here("data/CWB_peak_hep_nest_locs_through_2019.csv")) %>
   mutate(ColonyName = ifelse(ColonyName == "Lake Merced North" & Latitude == 37.728057, "Lake Merced Mesa", ColonyName)) %>% 
   dplyr::select("site.name" = ColonyName, "species" = SpeciesCode, "year" = SurveyYear, "peakactvnsts" = PeakNumberofNests) %>% 
   full_join(read.csv(here("data/all_sfbbo_sites_subreg.csv"))) %>% 
-  filter(site.name != "Elmwood Correctional")
+  filter(!site.name %in% c("Bacon Island", "Elmwood Correctional", "Sandy Wool Lake"))
 
 analysis_table <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
   full_join(hep_sites) %>%
+  filter(site.name != "Brentwood") %>% 
   bind_rows(sfbbo_nests) %>% 
   filter(!species %in% c("DCCO", "CAEG"), peakactvnsts >= 0, !is.na(year), between(year, start.year, end.year)) %>% 
   #cut_never_nested() %>% 
@@ -70,6 +71,11 @@ rain_lag <- readRDS(here("data/subreg_rain")) %>%
   group_by(subregion) %>% 
   mutate(subreg.rain = subreg.rain + (lag(subreg.rain)/2) + (lag(subreg.rain, 2)/3))
   
+subreg_mean_rain_lag <- rain_lag %>% 
+  filter(between(year, start.year, end.year)) %>% 
+  group_by(subregion) %>% 
+  summarise(mean.subreg.rain = mean(subreg.rain))
+
 trend_analysis_table1 <- analysis_table  %>%
   group_by(year, subregion, species) %>% 
   summarise(tot.nests = sum(peakactvnsts)) %>% 
