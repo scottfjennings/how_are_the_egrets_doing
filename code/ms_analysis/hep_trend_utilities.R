@@ -240,7 +240,8 @@ get_preds_glmnb <- function(zmod, zmod.name) {
   ana_table <- trend_analysis_table %>% 
     right_join(spp_subreg)
   
-  sub_rain <- readRDS(here("data/subreg_rain")) %>% 
+  sub_rain <- subreg_mean_rain_lag %>%  
+    #readRDS(here("data/subreg_rain")) %>%
     right_join(spp_subreg) %>% 
     distinct(mean.subreg.rain)
     
