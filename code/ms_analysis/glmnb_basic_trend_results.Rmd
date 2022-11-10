@@ -249,7 +249,7 @@ mod_pred_plot <- pred_dat %>%
   theme_bw() +
   theme(text = element_text(size=8))
 
-ggsave(paste("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_pred_plot_", zspp, ".png", sep = ""), mod_pred_plot, width = 7, height = 5, dpi = 300)
+ggsave(paste("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_pred_plot_", zspp, ".png", sep = ""), mod_pred_plot, width = 7, height = 5, dpi = 600)
 
 mod_pred_plot
 
@@ -658,3 +658,52 @@ Figure XXX. Results of analysis testing sensitivity of estimates of Great Blue H
 make_sensitivity_plot("GBHE")
 
 ```
+
+
+
+Figure XXX. 
+
+```{r}
+
+
+plot_pred_comparison <- function(zspp) {
+  raw_dat <- trend_analysis_table1 %>% 
+    filter(subregion == "All") %>% 
+    dplyr::select(species, subregion, year, tot.nests)
+
+
+  
+  pred_dat <- preds %>% 
+    filter(subregion == "All") %>% 
+    full_join(raw_dat) %>% 
+    full_join(subreg_key) %>% 
+    group_by(subregion, species) %>% 
+    mutate(text.y = ceiling(max(tot.nests) * 1.1)) %>% 
+    ungroup() %>% 
+    filter(!is.na(species)) %>% 
+    mutate(species = translate_bird_names(species, "alpha.code", "common.name"))
+
+  
+mod_pred_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = estimate), size = 0.5) +
+  geom_ribbon(aes(x = year, ymin = lci, ymax = uci), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests), size = 0.5)  + 
+  #scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  #scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.3))))) +
+  facet_wrap(~species, scales = "free_y") +
+  labs(y = "Nest abundance",
+       x = "Year",
+       title = "") +
+  theme_bw()
+
+ggsave("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_pred_plot_allspp_entireregion.png", mod_pred_plot, width = 7, height = 5, dpi = 600)
+
+mod_pred_plot
+
+}
+
+```
+
+
+
