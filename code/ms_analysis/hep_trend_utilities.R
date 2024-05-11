@@ -4,7 +4,7 @@
 
 
 # helper table for subregions
-subreg_key <- read.csv("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/subregion_key.csv") %>% 
+subreg_key <- read.csv("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/subregion_key.csv") %>% 
   mutate(subreg.name = factor(subreg.name, levels = c("Entire study area", 
                                                       "Outer Pacific Coast, North",
                                                       "Outer Pacific Coast, South", 
@@ -15,12 +15,13 @@ subreg_key <- read.csv("C:/Users/scott.jennings/Documents/Projects/core_monitori
                                                       "Suisun Bay", 
                                                       "Interior East Bay",
                                                       "South San Francisco Bay", 
-                                                      "Santa Clara Valley")))
+                                                      "Santa Clara Valley")),
+         tidal = ifelse(subregion %in% c("RUR", "NNC", "IEB", "SCV"), FALSE, TRUE),
+         tidal = ifelse(subregion == "All", NA, tidal))
                      
 
 
 
-# fit models ----
 # 
 #' Fit linear model on log transformed nest abundance
 #'
@@ -102,14 +103,14 @@ fit_mods_glmbn_year2 <- function(zspp, zsubreg) {
     
     zmod <- trend_analysis_table %>% 
       filter(species == zspp, subregion == zsubreg) %>% 
-      glm.nb(data = ., formula = tot.nests ~ poly(year, 2) + subreg.rain)
+      MASS::glm.nb(data = ., formula = tot.nests ~ poly(year, 2) + subreg.rain)
 
   }
 
 
 
 
-# getting model components ----
+
 
 #' extract model coefficients and their CI 
 #'
@@ -263,6 +264,200 @@ ilink <- family(zmod)$linkinv
 
 
 
+# from https://stackoverflow.com/questions/54438495/shift-legend-into-empty-facets-of-a-faceted-plot-in-ggplot2
+# move legend to free facet spot
+
+shift_legend <- function(p){
+  
+  # check if p is a valid object
+  if(!"gtable" %in% class(p)){
+    if("ggplot" %in% class(p)){
+      gp <- ggplotGrob(p) # convert to grob
+    } else {
+      message("This is neither a ggplot object nor a grob generated from ggplotGrob. Returning original plot.")
+      return(p)
+    }
+  } else {
+    gp <- p
+  }
+  
+  # check for unfilled facet panels
+  facet.panels <- grep("^panel", gp[["layout"]][["name"]])
+  empty.facet.panels <- sapply(facet.panels, function(i) "zeroGrob" %in% class(gp[["grobs"]][[i]]))
+  empty.facet.panels <- facet.panels[empty.facet.panels]
+  if(length(empty.facet.panels) == 0){
+    message("There are no unfilled facet panels to shift legend into. Returning original plot.")
+    return(p)
+  }
+  
+  # establish extent of unfilled facet panels (including any axis cells in between)
+  empty.facet.panels <- gp[["layout"]][empty.facet.panels, ]
+  empty.facet.panels <- list(min(empty.facet.panels[["t"]]), min(empty.facet.panels[["l"]]),
+                             max(empty.facet.panels[["b"]]), max(empty.facet.panels[["r"]]))
+  names(empty.facet.panels) <- c("t", "l", "b", "r")
+  
+  # extract legend & copy over to location of unfilled facet panels
+  guide.grob <- which(gp[["layout"]][["name"]] == "guide-box")
+  if(length(guide.grob) == 0){
+    message("There is no legend present. Returning original plot.")
+    return(p)
+  }
+  gp <- gtable::gtable_add_grob(x = gp,
+                        grobs = gp[["grobs"]][[guide.grob]],
+                        t = empty.facet.panels[["t"]],
+                        l = empty.facet.panels[["l"]],
+                        b = empty.facet.panels[["b"]],
+                        r = empty.facet.panels[["r"]],
+                        name = "new-guide-box")
+  
+  # squash the original guide box's row / column (whichever applicable)
+  # & empty its cell
+  guide.grob <- gp[["layout"]][guide.grob, ]
+  if(guide.grob[["l"]] == guide.grob[["r"]]){
+    gp <- cowplot::gtable_squash_cols(gp, cols = guide.grob[["l"]])
+  }
+  if(guide.grob[["t"]] == guide.grob[["b"]]){
+    gp <- cowplot::gtable_squash_rows(gp, rows = guide.grob[["t"]])
+  }
+  gp <- cowplot::gtable_remove_grobs(gp, "guide-box")
+  
+  return(gp)
+}
+
+
+plot_pred_comparison <- function(zspp) {
+  raw_dat <- trend_analysis_table1 %>% 
+    filter(species == zspp) %>% 
+    dplyr::select(species, subregion, year, tot.nests)
+  
+  
+  
+  pred_dat <- preds %>% 
+    filter(species == zspp) %>% 
+    full_join(raw_dat) %>% 
+    full_join(subreg_key) %>% 
+    group_by(subregion, species) %>% 
+    mutate(text.y = ceiling(max(tot.nests) * 1.1))
+  
+  
+  mod_pred_plot <- pred_dat %>% 
+    ggplot() +
+    geom_line(aes(x = year, y = estimate), size = 0.5) +
+    geom_ribbon(aes(x = year, ymin = lci, ymax = uci), alpha = 0.25) +
+    geom_point(aes(x = year, y = tot.nests), size = 0.5)  + 
+    scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+    scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.3))))) +
+    facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+    labs(y = "Nest abundance",
+         x = "Year",
+         title = "") +
+    theme_bw() +
+    theme(text = element_text(size=8))
+  
+  ggsave(paste("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_pred_plot_", zspp, ".png", sep = ""), mod_pred_plot, width = 7, height = 5, dpi = 600)
+  
+  mod_pred_plot
+  
+}
 
 
 
+
+#' mod_dev_explained
+#' 
+#' get deviance explained from a particular model for a particular species
+#'
+#' @param zspp 
+#' @param zmod 
+#'
+#' @return
+#' @export
+#'
+#' @examples  brac_year_dev <- mod_dev_explained("BRAC", "year")
+mod_dev_explained <- function(zspp, zmod) {
+  zspp_mod <- readRDS(here("fitted_models/final_models"))[[zspp]][[zmod]]
+  
+  dev_explained <- data.frame(dev.expl = 1 - (zspp_mod$deviance/zspp_mod$null.deviance),
+                              alpha.code = zspp,
+                              Modnames = zmod) %>% 
+    mutate(dev.expl = round(dev.expl, 2))
+  return(dev_explained)
+}
+
+
+
+fix_mod_name_out <- function(zvarb) {
+  zvarb = gsub("_", " + ", zvarb)
+  zvarb = gsub("2", "^2^", zvarb)
+  zvarb = gsub("year", "Year", zvarb)
+  zvarb = gsub("rain", "Rain", zvarb)
+  zvarb = gsub("lnYear", "log\\(Year\\)", zvarb)
+} 
+
+
+#' shift_legend
+#' 
+#' move plot legend to free facet spot. from https://stackoverflow.com/questions/54438495/shift-legend-into-empty-facets-of-a-faceted-plot-in-ggplot2
+#'
+#' @param p the ggplot object
+#'
+#' @return
+#' @export
+#'
+#' @examples
+shift_legend <- function(p){
+  
+  # check if p is a valid object
+  if(!"gtable" %in% class(p)){
+    if("ggplot" %in% class(p)){
+      gp <- ggplotGrob(p) # convert to grob
+    } else {
+      message("This is neither a ggplot object nor a grob generated from ggplotGrob. Returning original plot.")
+      return(p)
+    }
+  } else {
+    gp <- p
+  }
+  
+  # check for unfilled facet panels
+  facet.panels <- grep("^panel", gp[["layout"]][["name"]])
+  empty.facet.panels <- sapply(facet.panels, function(i) "zeroGrob" %in% class(gp[["grobs"]][[i]]))
+  empty.facet.panels <- facet.panels[empty.facet.panels]
+  if(length(empty.facet.panels) == 0){
+    message("There are no unfilled facet panels to shift legend into. Returning original plot.")
+    return(p)
+  }
+  
+  # establish extent of unfilled facet panels (including any axis cells in between)
+  empty.facet.panels <- gp[["layout"]][empty.facet.panels, ]
+  empty.facet.panels <- list(min(empty.facet.panels[["t"]]), min(empty.facet.panels[["l"]]),
+                             max(empty.facet.panels[["b"]]), max(empty.facet.panels[["r"]]))
+  names(empty.facet.panels) <- c("t", "l", "b", "r")
+  
+  # extract legend & copy over to location of unfilled facet panels
+  guide.grob <- which(gp[["layout"]][["name"]] == "guide-box")
+  if(length(guide.grob) == 0){
+    message("There is no legend present. Returning original plot.")
+    return(p)
+  }
+  gp <- gtable::gtable_add_grob(x = gp,
+                        grobs = gp[["grobs"]][[guide.grob]],
+                        t = empty.facet.panels[["t"]],
+                        l = empty.facet.panels[["l"]],
+                        b = empty.facet.panels[["b"]],
+                        r = empty.facet.panels[["r"]],
+                        name = "new-guide-box")
+  
+  # squash the original guide box's row / column (whichever applicable)
+  # & empty its cell
+  guide.grob <- gp[["layout"]][guide.grob, ]
+  if(guide.grob[["l"]] == guide.grob[["r"]]){
+    gp <- cowplot::gtable_squash_cols(gp, cols = guide.grob[["l"]])
+  }
+  if(guide.grob[["t"]] == guide.grob[["b"]]){
+    gp <- gtable::gtable_squash_rows(gp, rows = guide.grob[["t"]])
+  }
+  gp <- cowplot::gtable_remove_grobs(gp, "guide-box")
+  
+  return(gp)
+}

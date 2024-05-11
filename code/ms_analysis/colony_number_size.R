@@ -80,6 +80,7 @@ ggsave(here("figures/greg_col_size_num.png"), width = 8)
 
 # table with mean # colonies and mean colony size ----
 
+
 col_size_table_out <- col_size_table %>% 
   group_by(year, subreg.name, species) %>% 
   summarise(n.col = n()) %>% 
@@ -138,3 +139,10 @@ col_size_table %>%
 
 
 ggsave(here("figures/total_active_colonies.png"), width = 8)
+
+
+
+
+
+
+

@@ -1,0 +1,257 @@
+---
+title: "Heron and egret trend AIC tables"
+output: word_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+```{r}
+
+library(tidyverse)
+library(here)
+library(AICcmodavg)
+library(birdnames)
+library(flextable)
+library(ftExtra)
+library(officer)
+
+custom_bird_list <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/my_R_general/birdnames_support/data/custom_bird_list")
+
+
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/hep_trend_utilities.R")
+
+```
+
+```{r}
+
+# zspp = "ALL"
+
+
+# zspp_aic <- readRDS(here("fitted_models/final_models"))[[zspp]][["aic_tab"]]
+
+
+
+# zspp_subreg = "GREG_All"
+
+spp_aic_wrapper <- function(zspp_subreg) {
+zmods <- readRDS(here("fitted_models/spp_subreg_mods"))[[zspp_subreg]]
+
+table_header <- data.frame(spp.subreg = zspp_subreg)%>%
+  separate(spp.subreg, c("spp", "subregion"), sep = "_") %>% 
+  left_join(subreg_key) %>% 
+  mutate(spp = translate_bird_names(spp, "alpha.code", "common.name"),
+         spp.subreg.out = paste(spp, subreg.name, sep = ", "))
+  
+aic = aictab(zmods) %>% 
+  data.frame() %>%
+    mutate(Modnames = fix_mod_name_out(Modnames)) %>% 
+  select(Modnames, K, AICc, Delta_AICc, AICcWt, LL) %>% 
+  arrange(Delta_AICc) %>% 
+  mutate(across(c(AICc, Delta_AICc, LL), ~round(., 4)),
+         AICcWt = round(AICcWt, 2)) %>% 
+  flextable() %>% 
+  autofit()%>% 
+  add_header_row(values = table_header$spp.subreg.out, colwidths = 6) %>% 
+    set_header_labels(Modnames = "Model structure",
+                    Delta_AICc = "\u0394 AICc",
+                    AICcWt = "AICc wt",
+                    LL = "lnL")%>% 
+  align(j = 2:6, align = "center", part = "all") %>% 
+  fit_to_width(max_width = 7.5) %>%
+  colformat_md() 
+
+return(aic)
+}
+
+
+
+```
+
+Supplementary tables xx. Model selection tables for changes in abundance of 4 heron and egret species in the San Francisco Bay area ("Entire study area"), California, and 10 subregions, 1995-2019. Shown for each model are the model structure, number of parameters (K), Akaike Information Criterion value corrected for small sample size (AICc), difference in AICc value between lowest AICc value and that of the current model (Δ AICc), the AICc model weight (AICc wt), and the logarithm of the estimated maximum likelihood (lnL). The candidate model set was the same for all species and subregions except for Snowy Egret in Suisun, where the Year2 + Rain2 model would not converge.
+
+
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_All")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_OUC")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_RUR")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_PNM")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_CSF")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_SUS")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_IEB")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_SSF")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GREG_SCV")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_All")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_OUC")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_OUC-S")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_RUR")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_NNC")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_PNM")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_CSF")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_SUS")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_IEB")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_SSF")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("GBHE_SCV")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("SNEG_All")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("SNEG_OUC")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("SNEG_RUR")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("SNEG_PNM")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("SNEG_CSF")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("SNEG_SUS")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("SNEG_SSF")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("SNEG_SCV")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("BCNH_All")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("BCNH_OUC")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("BCNH_RUR")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("BCNH_PNM")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("BCNH_CSF")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("BCNH_SUS")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("BCNH_SSF")
+```
+<br>
+
+```{r}
+spp_aic_wrapper("BCNH_SCV")
+```

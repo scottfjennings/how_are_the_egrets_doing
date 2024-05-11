@@ -2,16 +2,19 @@
 
 library(tidyverse)
 library(here)
+library(ggpubr)
 
 start.year = 1995
 end.year = 2019
 
-source(here("code/hep_trend_utilities.r"))
+options(scipen = 999)
 
-source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
+source(here("code/ms_analysis/hep_trend_utilities.r"))
+
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
 
 # all these functions are in HEP_utility_functions.R
-hep_sites <- hep_sites_from_access("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb") %>% 
+hep_sites <- hep_sites_from_access("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb") %>% 
   distinct(parent.code, parent.site.name, subregion)
 
 
@@ -20,9 +23,9 @@ sites_subreg <- read.csv(here("data/all_sfbbo_sites_subreg.csv")) %>%
   bind_rows(hep_sites %>% dplyr::select(parent.site.name, subregion))
 
 
-colony_rain_season <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/hep_prism_combined") %>% 
+colony_rain_season <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/hep_prism_combined") %>% 
   left_join(hep_sites) %>% 
-  bind_rows(readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/sfbbo_prism_combined") %>% 
+  bind_rows(readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/sfbbo_prism_combined") %>% 
               rename("parent.site.name" = site.name)) %>% 
   mutate(month = as.numeric(month),
          year = as.numeric(year)) %>% 
@@ -35,9 +38,9 @@ colony_rain_season <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_m
   ungroup()
 
 
-colony_rain <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/hep_prism_combined") %>% 
+colony_rain <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/hep_prism_combined") %>% 
   left_join(hep_sites) %>% 
-  bind_rows(readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/sfbbo_prism_combined") %>% 
+  bind_rows(readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_prism_data/sfbbo_prism_combined") %>% 
               rename("parent.site.name" = site.name)) %>% 
   mutate(month = as.numeric(month),
          year = as.numeric(year)) %>% 
@@ -64,22 +67,59 @@ saveRDS(subreg_rain, here("data/subreg_rain"))
 
 ### summarize, visualize
 
+lm_eqn <- function(df){
+  # https://stackoverflow.com/questions/7549694/add-regression-line-equation-and-r2-on-graph
+  m <- lm(subreg.rain ~ birdyear, df)
+  
+  #eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+  #                 list(a = format(unname(coef(m)[1]), digits = 2),
+  #                      b = format(unname(coef(m)[2]), digits = 2),
+  #                      r2 = format(summary(m)$r.squared, digits = 3)))
+  #as.character(as.expression(eq))
+  r2 <- summary(m)$r.squared
+}
+
+
+subreg_rain_nested <- subreg_rain %>% 
+  filter(between(birdyear, start.year, end.year)) %>% 
+  group_by(subreg.name) %>% 
+  nest()
+
+
+rain_model <- function(df) {
+  lm(subreg.rain ~ birdyear, data = df)
+}
+  
+subreg_rain_nested <- subreg_rain_nested %>%
+  mutate(model = map(data, rain_model))
+
+
+rain_mod_r2 <- subreg_rain_nested %>% 
+  mutate(glance = map(model, broom::glance)) %>% 
+  unnest(glance) %>% 
+  select(subreg.name, adj.r.squared, p.value) %>% 
+  mutate(across(c(adj.r.squared, p.value), ~format(round(., 2), nsmall = 2, trim=TRUE)),
+         r2.out = paste("~R^{2} == ", adj.r.squared, sep = ""),
+         p.out = paste("P-value = ", p.value, sep = ""))
 
 subreg_rain %>% 
   filter(between(birdyear, start.year, end.year)) %>% 
   ggplot() +
   geom_col(aes(x = birdyear, y = subreg.rain)) +
-  #scale_fill_manual(values = c("blue", "red")) +
-  stat_smooth(aes(x = birdyear, y = subreg.rain), method = "lm", color = "black", se = FALSE, size = .5) +
+  geom_smooth(aes(x = birdyear, y = subreg.rain), method = "lm", color = "black", se = TRUE, size = .5, formula = y ~ x) +
+  geom_text(data = rain_mod_r2, aes(x = 2011.5, y = 1600, label = r2.out), parse = TRUE, size = 2, hjust = 0.25) +
+  geom_text(data = rain_mod_r2, aes(x = 2011.5, y = 1400, label = p.out), size = 2) +
   facet_wrap(~subreg.name, labeller = labeller(subreg.name = label_wrap_gen(30))) +
   scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) +
   theme_bw() +
   labs(x = "Year",
-       y = "Annual rainfall (mm)",
-       fill = "") +
-  theme(text = element_text(size=8))
+       y = "Annual rainfall (mm)")+ 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
-ggsave(here("figures/subregion_rain_plot.png"), width = 7, height = 4, dpi = 300)
+
+  
+
+ggsave(here("figures/subregion_rain_plot.png"), width = 7, height = 7, dpi = 300)
 
 
 subreg_rain %>% 

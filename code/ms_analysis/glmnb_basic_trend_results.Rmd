@@ -32,14 +32,14 @@ library(officer)
 
 
 #source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
-source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/hep_trend_utilities.r")
-source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/hep_trend_utilities.R")
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
 
 ```
 
 ```{r}
 # prepare data ----
-hepdata_location = here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")
+hepdata_location = here("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")
 # all these functions are in HEP_utility_functions.R
 hep_sites <- hep_sites_from_access(hepdata_location) %>% 
   dplyr::select(code, parent.code, site.name, parent.site.name, subregion)
@@ -55,7 +55,7 @@ sfbbo_nests <- read.csv(here("data/CWB_peak_hep_nest_locs_through_2019.csv")) %>
   full_join(read.csv(here("data/all_sfbbo_sites_subreg.csv"))) %>% 
   filter(!site.name %in% c("Bacon Island", "Elmwood Correctional", "Sandy Wool Lake"))
 
-analysis_table <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
+analysis_table <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
   full_join(hep_sites) %>%
   filter(site.name != "Brentwood") %>% 
   bind_rows(sfbbo_nests) %>% 
@@ -150,7 +150,7 @@ names(spp_subreg_mods) <- spp_subreg$spp.subreg
 preds <- map2_df(spp_subreg_mods, names(spp_subreg_mods), get_preds_glmnb)
 coef_ci <- map2_df(spp_subreg_mods, names(spp_subreg_mods), get_coefs_cis)
 
-
+saveRDS(preds, here("output/model_predictions"))
 ```
 
 ```{r}

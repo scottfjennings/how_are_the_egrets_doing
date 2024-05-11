@@ -1,0 +1,191 @@
+---
+title: "Model averaged plots"
+output: word_document
+date: "`r Sys.Date()`"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE,
+                      warning = FALSE,
+                      error = FALSE,
+                      fig.width = 7,
+                      fig.height = 9)
+```
+
+
+
+```{r}
+library(tidyverse)
+library(cowplot)
+library(birdnames)
+library(here)
+library(scales)
+
+#source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/hep_trend_utilities.R")
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
+
+```
+
+```{r}
+
+all_mod_av_preds <- readRDS(here("fitted_models/all_mod_av_preds"))
+
+trend_analysis_table <- readRDS(here("data/trend_analysis_table"))
+
+
+```
+
+
+
+
+```{r}
+
+
+plot_mod_avg_pred <- function(zspp) {
+  raw_dat <- trend_analysis_table %>% 
+    filter(species == zspp) %>% 
+    dplyr::select(species, subregion, year, tot.nests)
+
+
+  
+  pred_dat <- all_mod_av_preds %>% 
+    filter(species == zspp) %>% 
+    full_join(raw_dat) %>% 
+    full_join(subreg_key) %>% 
+    group_by(subregion, species) %>% 
+    mutate(max.y = ifelse(max(tot.nests) > 10, ceiling(max(tot.nests) * 1.1), 10),
+           max.y = replace_na(max.y, 10))
+
+  
+mod_pred_plot <- pred_dat %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = mod.avg.pred), size = 0.5) +
+  geom_ribbon(aes(x = year, ymin = lower.CL, ymax = upper.CL), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests), size = 0.5)  + 
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  scale_y_continuous(breaks= pretty_breaks()) + 
+  expand_limits(y = 0) + 
+  #scale_y_continuous(breaks = function(x) unique(floor(pretty(seq(0, (max(x) + 1) * 1.3))))) +
+  facet_wrap(~subreg.name, scales = "free_y", labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "Nest abundance",
+       x = "Year",
+       title = translate_bird_names(zspp, "alpha.code", "common.name")) +
+  theme_bw() +
+  theme(text = element_text(size=8)) +
+  geom_blank(aes(y = max.y))
+
+ggsave(paste("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_avg_pred_plot_", zspp, ".png", sep = ""), mod_pred_plot, width = 7, height = 9, dpi = 600)
+
+mod_pred_plot
+
+}
+
+```
+
+```{r}
+
+
+plot_mod_avg_pred_2panel <- function(zspp) {
+  raw_dat <- trend_analysis_table %>% 
+    filter(species == zspp) %>% 
+    dplyr::select(species, subregion, year, tot.nests)
+
+
+  
+  pred_dat <- all_mod_av_preds %>% 
+    filter(species == zspp) %>% 
+    full_join(raw_dat) %>% 
+    full_join(subreg_key) %>% 
+    group_by(subregion, species) %>% 
+    mutate(text.y = ceiling(max(tot.nests) * 1.1))
+
+  
+entireBA_mod_pred_plot <- pred_dat %>% 
+  filter(subregion == "All") %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = mod.avg.pred), size = 0.5) +
+  geom_ribbon(aes(x = year, ymin = lower.CL, ymax = upper.CL), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests), size = 0.5)  + 
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  scale_y_continuous(breaks= pretty_breaks()) + 
+  expand_limits(y = 0) + 
+  facet_wrap(~subreg.name, labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "",
+       x = "",
+       title = "") +
+  theme_bw() +
+  theme(text = element_text(size=8),
+        plot.margin = unit(c(0, .75, -.25, 0), "cm"))
+
+
+subreg_mod_pred_plot <- pred_dat %>% 
+  filter(subregion != "All") %>% 
+  ggplot() +
+  geom_line(aes(x = year, y = mod.avg.pred), size = 0.5) +
+  geom_ribbon(aes(x = year, ymin = lower.CL, ymax = upper.CL), alpha = 0.25) +
+  geom_point(aes(x = year, y = tot.nests), size = 0.5)  + 
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) + 
+  scale_y_continuous(breaks= pretty_breaks()) + 
+  expand_limits(y = 0) + 
+  facet_wrap(~subreg.name, labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  labs(y = "",
+       x = "",
+       title = "") +
+  theme_bw() +
+  theme(text = element_text(size=8),
+        plot.margin = unit(c(-.5, .75, 0, 0), "cm"),
+        axis.text.x = element_text(angle = 45, hjust=1.25, vjust = 1.5))
+
+
+
+out_plot <- plot_grid(entireBA_mod_pred_plot, subreg_mod_pred_plot, ncol = 1, rel_heights = c(.4, .6), align = "v", axis = "l")  + 
+  theme(plot.margin = margin(10, 0, 10, 20)) +
+  draw_label(translate_bird_names(zspp, "alpha.code", "common.name"), x = 0.15, y = 1, vjust = 0.9, angle= 0) +
+  draw_label("Year", x=0.5, y=  0, vjust=-0.1, angle= 0) +
+  draw_label("Nest abundance", x=  0, y=0.5, vjust= 0, angle=90)
+
+ggsave(paste("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_avg_pred_plot_", zspp, ".png", sep = ""), out_plot, width = 7, height = 9, dpi = 600)
+
+out_plot
+}
+
+```
+
+
+
+```{r}
+
+plot_mod_avg_pred("GREG")
+#plot_mod_avg_pred_2panel("GREG")
+
+```
+
+<br>
+
+```{r}
+
+plot_mod_avg_pred("GBHE")
+#plot_mod_avg_pred_2panel("GBHE")
+
+```
+
+<br>
+
+```{r}
+
+plot_mod_avg_pred("SNEG")
+#plot_mod_avg_pred_2panel("SNEG")
+
+```
+
+<br>
+
+```{r}
+
+plot_mod_avg_pred("BCNH")
+#plot_mod_avg_pred_2panel("BCNH")
+
+```

@@ -1,0 +1,196 @@
+---
+title: "Heron and egret trend best models table"
+output: word_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+```{r}
+
+
+library(tidyverse)
+library(here)
+library(AICcmodavg)
+library(birdnames)
+library(flextable)
+library(ftExtra)
+library(officer)
+
+custom_bird_list <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/my_R_general/birdnames_support/data/custom_bird_list")
+
+
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/hep_trend_utilities.R")
+
+
+options(scipen = 999)
+
+```
+
+```{r}
+
+
+# zspp_subreg = "GREG_All"
+
+get_comp_mods <- function(zspp_subreg) {
+zmods <- readRDS(here("fitted_models/spp_subreg_mods"))[[zspp_subreg]]
+
+table_header <- data.frame(spp.subreg = zspp_subreg) %>%
+  separate(spp.subreg, c("spp", "subregion"), sep = "_") %>% 
+  left_join(subreg_key) %>% 
+  mutate(spp = translate_bird_names(spp, "alpha.code", "common.name"),
+         spp.subreg.out = paste(spp, subreg.name, sep = ", "),
+         subreg.name = as.character(subreg.name)) %>% 
+  distinct()
+
+get_dev_expl <- function(zmod) {
+dev_expl <- data.frame(dev.expl = 100*with(summary(zmod), 1 - deviance/null.deviance))  
+}
+dev_expl <- map_df(zmods, get_dev_expl) %>% 
+  bind_cols(Modnames = names(zmods))
+
+  
+aic = aictab(zmods) %>% 
+  data.frame() %>%
+  full_join(dev_expl) %>% 
+  filter(Delta_AICc <= 2) %>% 
+  bind_cols(table_header)
+}
+
+
+comp_mods_wrapper <- function(zspp) {
+  spp_subreg_dat <- filter(spp_subreg, species == zspp)
+  
+map_df(spp_subreg_dat$spp.subreg, get_comp_mods) %>% 
+    mutate(Modnames = fix_mod_name_out(Modnames)) %>% 
+  arrange(subreg.name, Delta_AICc) %>% 
+  mutate(across(c(AICc, Delta_AICc, LL), ~round(., 4)),
+         across(c(AICcWt, dev.expl), ~round(., 2)),
+         subreg.name = as.character(ifelse(Delta_AICc == 0, subreg.name, ""))) %>% 
+  select(subreg.name, Modnames, K, Delta_AICc, AICcWt, LL, dev.expl) %>% view()
+  flextable() %>% 
+  autofit()%>% 
+    set_header_labels(subreg.name = "Subregion",
+                      Modnames = "Model structure",
+                    Delta_AICc = "\u0394 AICc",
+                    AICcWt = "AICc wt",
+                    LL = "lnL",
+                    dev.expl = "Dev.\nexplained")%>% 
+  align(j = 2:7, align = "center", part = "all") %>% 
+  fit_to_width(max_width = 7.5) %>%
+  colformat_md() 
+
+}
+
+best_mods_wrapper <- function(zspp) {
+  spp_subreg_dat <- filter(spp_subreg, species == zspp)
+  
+map_df(spp_subreg_dat$spp.subreg, get_comp_mods) %>% 
+  filter(Delta_AICc == 0) %>% 
+  arrange(dev.expl) %>% 
+  flextable() %>% 
+  autofit()%>% 
+    set_header_labels(subreg.name = "Subregion",
+                      Modnames = "Model structure",
+                    Delta_AICc = "\u0394 AICc",
+                    AICcWt = "AICc wt",
+                    LL = "lnL",
+                    dev.expl = "Dev.\nexplained")%>% 
+  align(j = 2:7, align = "center", part = "all") %>% 
+  fit_to_width(max_width = 7.5) %>%
+  colformat_md() 
+
+}
+
+
+
+spp_subreg <- readRDS(here("data/spp_subreg")) %>%
+  mutate(species = factor(species, levels = c("GREG", "GBHE", "SNEG", "BCNH"))) %>% 
+  full_join(subreg_key) %>% 
+  arrange(species, subreg.name) 
+
+
+zz <- map_df(spp_subreg$spp.subreg, get_comp_mods)
+
+yy <- zz  %>% 
+  full_join(subreg_key) %>% 
+  filter(subregion != "All") %>% 
+  group_by(spp, tidal) %>% 
+  summarise(all.mods = paste(Modnames, collapse = ", ")) %>% 
+  ungroup() %>% 
+  mutate(num.rain = str_count(all.mods, "rain"))
+  
+
+```
+
+Supplementary tables xx. Competitive models (Δ AICc ≤ 2) for estimating changes in abundance of 4 heron and egret species in the San Francisco Bay area ("Entire study area"), California, and 10 subregions, 1995-2019. Shown for each model are the model structure, number of parameters (K), Akaike Information Criterion value corrected for small sample size (AICc), difference in AICc value between lowest AICc value and that of the current model (Δ AICc), the AICc model weight (AICc wt), and the logarithm of the estimated maximum likelihood (lnL). The candidate model set was the same for all species and subregions except for Snowy Egret in Suisun, where the Year2 + Rain2 model would not converge.
+
+
+<br>
+Great Egret
+```{r}
+comp_mods_wrapper("GREG")
+```
+
+
+
+<br>
+Great Blue Heron
+```{r}
+comp_mods_wrapper("GBHE")
+```
+
+
+<br>
+Snowy Egret
+```{r}
+comp_mods_wrapper("SNEG")
+```
+
+
+<br>
+Black-Crowned Night-heron
+```{r}
+comp_mods_wrapper("BCNH")
+```
+ <br>  
+ 
+ 
+Best models only
+
+<br>
+Great Egret
+ 
+```{r}
+best_mods_wrapper("GREG")
+```
+
+
+
+<br>
+Great Blue Heron
+
+```{r}
+best_mods_wrapper("GBHE")
+```
+
+
+<br>
+Snowy Egret
+ 
+```{r}
+best_mods_wrapper("SNEG")
+```
+
+
+<br>
+Black-Crowned Night-heron
+
+```{r}
+best_mods_wrapper("BCNH")
+```
+
