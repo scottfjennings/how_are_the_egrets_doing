@@ -37,6 +37,8 @@ all_mod_av_preds <- readRDS(here("fitted_models/all_mod_av_preds"))
 trend_analysis_table <- readRDS(here("data/trend_analysis_table"))
 
 
+all_mod_av_preds_per_change <- readRDS(here("fitted_models/all_mod_av_per_change"))
+
 ```
 
 
@@ -45,20 +47,26 @@ trend_analysis_table <- readRDS(here("data/trend_analysis_table"))
 pred_table_start <- all_mod_av_preds %>% 
   group_by(species, subregion) %>% 
   mutate(keep.year = case_when(year == min(year) ~ "first.year",
-                               year == max(year) ~ "last.year",
-                               mod.avg.pred == max(mod.avg.pred) ~ "maxest.year")) %>% 
+                               year == max(year) ~ "last.year")) %>% 
   ungroup() %>% 
   filter(!is.na(keep.year)) %>% 
   mutate(across(c(mod.avg.pred, lower.CL, upper.CL), ~round(., 0)),
-         out.estimate = paste(mod.avg.pred, " (", lower.CL, "-", upper.CL, ")", sep = "")) 
+         out.estimate = paste(mod.avg.pred, " (", lower.CL, ", ", upper.CL, ")", sep = "")) 
 
-per_change <- pred_table_start  %>% 
-  filter(keep.year != "maxest.year") %>% 
-  pivot_wider(id_cols = c(species, subregion), names_from = keep.year, values_from = mod.avg.pred) %>% 
-  mutate(abs.change = last.year - first.year,
-         per.change = ((last.year/first.year) - 1) * 100,
-         per.change = round(per.change, 1)) %>% 
-  dplyr::select(species, subregion, per.change, abs.change)
+#per_change <- pred_table_start  %>% 
+#  filter(keep.year != "maxest.year") %>% 
+#  pivot_wider(id_cols = c(species, subregion), names_from = keep.year, values_from = mod.avg.pred) %>% 
+#  mutate(abs.change = last.year - first.year,
+#         per.change = ((last.year/first.year) - 1) * 100,
+#         per.change = round(per.change, 1)) %>% 
+#  dplyr::select(species, subregion, per.change, abs.change)
+ 
+per_change <- all_mod_av_preds_per_change %>% 
+  separate(alpha.code, c("species", "subregion"), sep = "_") %>% 
+  mutate(across(c(per.change, per.change.LCI, per.change.UCI, marginal.effect, marginal.lower.CL, marginal.upper.CL), ~round(., 0)),
+         out.per.change = paste(per.change, "% (", per.change.LCI, "%, ", per.change.UCI, "%)", sep = ""),
+         out.abs.change = paste(marginal.effect, " (", marginal.lower.CL, ", ", marginal.upper.CL, ")", sep = "")) %>%  
+  dplyr::select(species, subregion, out.per.change, out.abs.change)
   
 
 pred_table_est <- pred_table_start %>% 
@@ -82,7 +90,7 @@ write.csv(pred_table, here("output/trend_model_predictions.csv"), row.names = FA
 
 
 
-Table XX. Changes in estimated number of nests of four Ardeid species by subregion in the San Francisco Bay area, 1995-2019. Shown for each species and subregion are the first and last years a species was observed nesting, the estimated nest abundance and 95% Confidence interval in the first and last years, and the percent change from the first to last year. An * following a subregion name indicates there was insufficient data for modeling. An * following percent change signifies no models with year structure were competitive (∆AICc ≤ 2) and/or the intercept only model was competitive, indicating poor statistical evidence for any change over time.
+
 ```{r}
 
 
@@ -93,23 +101,25 @@ spp_subreg <- readRDS(here("data/spp_subreg")) %>%
 
 
 pred_table_out <-  pred_table %>% 
-    left_join(readRDS(here("fitted_models/change_evidence"))) %>% 
+    #left_join(readRDS(here("fitted_models/change_evidence"))) %>% 
     arrange(subreg.name) %>% 
   mutate(common.name = translate_bird_names(species, "alpha.code", "common.name"),
          species = factor(species, levels = levels(spp_subreg$species))) %>%  
   arrange(species, subreg.name) %>% 
-    mutate(per.change = format(round(per.change, 1), nsmall = 1, trim=TRUE),
-           per.change = ifelse(change.evidence == "strong", per.change, paste(per.change, "*", sep = "")),
-           break1 = "",
+    mutate(break1 = "",
            subreg.name = ifelse(is.na(first.year), paste(subreg.name, "*", sep = ""), as.character(subreg.name)))
   
 # pred_table_out %>% group_by(species) %>% filter(subregion != "All", spp.subreg != "SNEG_SUS") %>% filter(abs.change == max(abs.change) | abs.change == min(abs.change)) %>% view()
 
   #zfoots <- sprintf("%.0f", which(is.na(ztable$first.year)))
-  
+```
+
+```{r eval=FALSE}
+
+# Table XX. Changes in estimated number of nests of four Ardeid species by subregion in the San Francisco Bay area, 1995-2019. Shown for each species and subregion are the first and last years a species was observed nesting, the estimated nest abundance and 95% Confidence interval in the first and last years, and the percent change from the first to last year. An * following a subregion name indicates there was insufficient data for modeling. An * following percent change signifies no models with year structure were competitive (∆AICc ≤ 2) and/or the intercept only model was competitive, indicating poor statistical evidence for any change over time.
     pred_table_out %>%
       mutate(common.name = ifelse(subregion == "All", common.name, "")) %>% 
-    dplyr::select(common.name, subreg.name, first.year, est.first.year, break1, last.year, est.last.year, per.change, -species) %>%
+    dplyr::select(common.name, subreg.name, first.year, est.first.year, break1, last.year, est.last.year, out.per.change, -species) %>%
       flextable() %>% 
       add_header_row(values = c("", "First year observed", "", 
                               "Final year observed", ""), colwidths = c(2, 2, 1, 2, 1)) %>%
@@ -120,7 +130,7 @@ pred_table_out <-  pred_table %>%
                     break1 = "",
                     last.year = "Year",
                     est.last.year = "Estimate (95% CI)",
-                    per.change = "% change") %>%
+                    out.per.change = "% change") %>%
     align(j = 3:8, align = "center", part = "all") %>% 
   fit_to_width(max_width = 7.5) %>%
   border(i = c(9, 20, 28), part = "body", border.bottom = fp_border(color = "black")) %>% 
@@ -143,13 +153,11 @@ pred_table_out <-  pred_table %>%
 make_spp_tab <- function(zspp) {
   ztable <- filter(pred_table, species == zspp) %>% 
     full_join(subreg_key %>% dplyr::select(subreg.name))  %>% 
-    left_join(readRDS(here("fitted_models/change_evidence"))) %>% 
+    #left_join(readRDS(here("fitted_models/change_evidence"))) %>% 
     arrange(subreg.name) %>% 
-    mutate(per.change = format(round(per.change, 1), nsmall = 1, trim=TRUE),
-           per.change = ifelse(change.evidence == "strong", per.change, paste(per.change, "*", sep = "")),
-           break1 = "",
+    mutate(break1 = "",
            subreg.name = ifelse(is.na(first.year), paste(subreg.name, "*", sep = ""), as.character(subreg.name))) %>% 
-    dplyr::select(subreg.name, first.year, est.first.year, break1, last.year, est.last.year, per.change, -species)
+    dplyr::select(subreg.name, first.year, est.first.year, break1, last.year, est.last.year, out.per.change, -species)
   
   #zfoots <- sprintf("%.0f", which(is.na(ztable$first.year)))
   
@@ -162,7 +170,7 @@ make_spp_tab <- function(zspp) {
                     break1 = "",
                     last.year = "Year",
                     est.last.year = "Estimate (95% CI)",
-                    per.change = "% change") %>%
+                    out.per.change = "% change (95% CI)") %>%
     align(j = 2:7, align = "center", part = "all") %>%
     border_remove() %>%
     border(i = 1, border.top = fp_border(color = "black"), part = "header") %>%
@@ -170,20 +178,48 @@ make_spp_tab <- function(zspp) {
     #hline_top(part = "body") %>%
     hline_bottom(part = "body") %>%
     fit_to_width(max_width = 8.5) %>% 
-    width(j = c(1, 3, 6), width = 1.5) %>% 
+    width(j = c(1, 3, 6, 7), width = 1.5) %>% 
     width(j = c(2, 5), width = .5) %>% 
     width(j = 7, width = 1) %>% 
       width(j = 4, width = 0.1) 
+}
+
+make_spp_tab2 <- function(zspp) {
+  ztable <- filter(pred_table, species == zspp) %>% 
+    full_join(subreg_key %>% dplyr::select(subreg.name))  %>% 
+    arrange(subreg.name) %>% 
+    mutate(years.obs = paste(first.year, last.year, sep = ", "),
+           break1 = "",
+           subreg.name = ifelse(is.na(first.year), paste(subreg.name, "*", sep = ""), as.character(subreg.name))) %>% 
+    dplyr::select(subreg.name, years.obs, out.abs.change, out.per.change, est.last.year)
+  
+  
+    flextable(ztable) %>%
+    set_header_labels(subreg.name = "Subregion",
+                    years.obs = "First and last\nyear observed",
+                    est.first.year = "Estimate (95% CI)",
+                    est.last.year = "Final year estimated\nabundance (95% CI)",
+                    out.per.change = "% change (95% CI)",
+                    out.abs.change = "Absolute change (95% CI)") %>%
+    align(j = 2:5, align = "center", part = "all") %>%
+    border_remove() %>%
+    border(i = 1, border.top = fp_border(color = "black"), part = "header") %>%
+    hline_bottom(part = "body") %>%
+    fit_to_width(max_width = 8.5) %>% 
+    width(j = 1:5, width = 1.5)
 }
 
 ```
 
 
 
-```{r}
+```{r eval=FALSE}
 
-max_min_per_change <- pred_table %>%
+# get the min and max percent change for each species
+max_min_change <- all_mod_av_preds_per_change %>% 
+  separate(alpha.code, c("species", "subregion"), sep = "_") %>%
   filter(per.change != Inf & per.change != -Inf, subregion != "All") %>%
+  left_join(subreg_key) %>% 
   dplyr::select(species, subreg.name, contains("first.year"), contains("last.year"), per.change) %>%  
   group_by(species) %>% 
   mutate(max.per.change = per.change == max(per.change),
@@ -191,12 +227,14 @@ max_min_per_change <- pred_table %>%
   ungroup() %>% 
   filter(max.per.change == TRUE | min.per.change == TRUE)
 
-max_min_abs_change <- pred_table %>%
-filter(subregion != "All") %>% 
-  dplyr::select(species, subreg.name, contains("first.year"), contains("last.year"), abs.change) %>%  
+max_min_abs_change <- all_mod_av_preds_per_change %>% 
+  separate(alpha.code, c("species", "subregion"), sep = "_") %>%
+  filter(per.change != Inf & per.change != -Inf, subregion != "All") %>%
+  left_join(subreg_key) %>%   
+  dplyr::select(species, subreg.name, contains("first.year"), contains("last.year"), marginal.effect) %>% 
   group_by(species) %>% 
-  mutate(max.abs.change = abs.change == max(abs.change),
-         min.abs.change = abs.change == min(abs.change)) %>% 
+  mutate(max.abs.change = marginal.effect == max(marginal.effect),
+         min.abs.change = marginal.effect == min(marginal.effect)) %>% 
   ungroup() %>% 
   filter(max.abs.change == TRUE | min.abs.change == TRUE)
 
@@ -229,7 +267,7 @@ make_change_text <- function(zspp) {
 
 
 
-`r make_change_text("GREG")`
+
 <br>  
 
 
@@ -237,13 +275,17 @@ make_change_text <- function(zspp) {
 Table XX. Changes in estimated number of Great Egret nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the first and last years a species was observed nesting, the estimated nest abundance and 95% Confidence interval in the first and last years, and the percent change from the first to last year. An * following a subregion name indicates there was insufficient data for modeling. An * following percent change signifies no models with year structure were competitive (∆AICc ≤ 2) and/or the intercept only model was competitive, indicating poor statistical evidence for any change over time.
 <br>
 ```{r}
+#`r make_change_text("GREG")`
 make_spp_tab("GREG")
+```
+<br>
+```{r}
+make_spp_tab2("GREG")
 ```
 
 <br>  
 <br>  
 
-`r make_change_text("GBHE")`
 <br>  
 
 
@@ -251,13 +293,17 @@ make_spp_tab("GREG")
 Table XX. Changes in estimated number of Great Blue Heron nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the first and last years a species was observed nesting, the estimated nest abundance and 95% Confidence interval in the first and last years, and the percent change from the first to last year. An * following a subregion name indicates there was insufficient data for modeling. An * following percent change signifies no models with year structure were competitive (∆AICc ≤ 2) and/or the intercept only model was competitive, indicating poor statistical evidence for any change over time.
 <br>
 ```{r}
+#`r make_change_text("GBHE")`
 make_spp_tab("GBHE")
+```
+<br>
+```{r}
+make_spp_tab2("GBHE")
 ```
 
 <br>  
 <br>  
 
-`r make_change_text("SNEG")`
 <br>  
 
 
@@ -265,14 +311,18 @@ make_spp_tab("GBHE")
 Table XX. Changes in estimated number of Snowy Egret nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the first and last years a species was observed nesting, the estimated nest abundance and 95% Confidence interval in the first and last years, and the percent change from the first to last year. An * following a subregion name indicates there was insufficient data for modeling. An * following percent change signifies no models with year structure were competitive (∆AICc ≤ 2) and/or the intercept only model was competitive, indicating poor statistical evidence for any change over time.
 <br>
 ```{r}
+#`r make_change_text("SNEG")`
 make_spp_tab("SNEG")
+```
+<br>
+```{r}
+make_spp_tab2("SNEG")
 ```
 
 <br>  
 <br>  
 
-
-`r make_change_text("BCNH")` 
+ 
 <br>  
 
 
@@ -280,5 +330,10 @@ make_spp_tab("SNEG")
 Table XX. Changes in estimated number of Black-crowned Night-Heron nests by subregion in the San Francisco Bay area, 1995-2019. Shown for each subregion are the first and last years a species was observed nesting, the estimated nest abundance and 95% Confidence interval in the first and last years, and the percent change from the first to last year. An * following a subregion name indicates there was insufficient data for modeling. An * following percent change signifies no models with year structure were competitive (∆AICc ≤ 2) and/or the intercept only model was competitive, indicating poor statistical evidence for any change over time.
 <br>
 ```{r}
+#`r make_change_text("BCNH")`
 make_spp_tab("BCNH")
+```
+<br>
+```{r}
+make_spp_tab2("BCNH")
 ```

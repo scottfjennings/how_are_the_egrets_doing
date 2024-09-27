@@ -13,6 +13,31 @@ source(here("code/ms_analysis/hep_trend_utilities.r"))
 
 source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
 
+
+
+
+
+
+# helper table for subregions
+subreg_key <- read.csv("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/subregion_key.csv") %>% 
+  mutate(subreg.name = str_replace(subreg.name, "River, Laguna", "River and Laguna"),
+         subreg.name = factor(subreg.name, levels = c("Entire study area", 
+                                                      "Outer Pacific Coast, North",
+                                                      "Outer Pacific Coast, South", 
+                                                      "Russian River and Laguna de Santa Rosa", 
+                                                      "Northern Napa County",
+                                                      "San Pablo Bay", 
+                                                      "Central San Francisco Bay", 
+                                                      "Suisun Bay", 
+                                                      "Interior East Bay",
+                                                      "South San Francisco Bay", 
+                                                      "Santa Clara Valley")),
+         tidal = ifelse(subregion %in% c("RUR", "NNC", "IEB", "SCV"), FALSE, TRUE),
+         tidal = ifelse(subregion == "All", NA, tidal))
+
+
+
+
 # all these functions are in HEP_utility_functions.R
 hep_sites <- hep_sites_from_access("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb") %>% 
   distinct(parent.code, parent.site.name, subregion)
@@ -106,10 +131,10 @@ subreg_rain %>%
   filter(between(birdyear, start.year, end.year)) %>% 
   ggplot() +
   geom_col(aes(x = birdyear, y = subreg.rain)) +
-  geom_smooth(aes(x = birdyear, y = subreg.rain), method = "lm", color = "black", se = TRUE, size = .5, formula = y ~ x) +
+  geom_smooth(aes(x = birdyear, y = subreg.rain), method = "lm", color = "black", se = TRUE, linewidth = .5, formula = y ~ x) +
   geom_text(data = rain_mod_r2, aes(x = 2011.5, y = 1600, label = r2.out), parse = TRUE, size = 2, hjust = 0.25) +
   geom_text(data = rain_mod_r2, aes(x = 2011.5, y = 1400, label = p.out), size = 2) +
-  facet_wrap(~subreg.name, labeller = labeller(subreg.name = label_wrap_gen(30))) +
+  facet_wrap(~subreg.name, labeller = labeller(subreg.name = label_wrap_gen(25))) +
   scale_x_continuous(breaks = seq(1995, 2020, by = 5), labels = seq(1995, 2020, by = 5)) +
   theme_bw() +
   labs(x = "Year",
@@ -119,7 +144,7 @@ subreg_rain %>%
 
   
 
-ggsave(here("figures/subregion_rain_plot.png"), width = 7, height = 7, dpi = 300)
+ggsave(here("documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 2.jpg"), width = 7, height = 7, dpi = 300)
 
 
 subreg_rain %>% 

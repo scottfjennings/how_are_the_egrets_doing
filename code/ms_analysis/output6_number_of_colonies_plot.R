@@ -16,6 +16,21 @@ source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_mo
 source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
 
 
+subreg_key <- read.csv("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/subregion_key.csv") %>% 
+  mutate(subreg.name = str_replace(subreg.name, "River, Laguna", "River and Laguna"),
+         subreg.name = factor(subreg.name, levels = c("Entire study area", 
+                                                      "Outer Pacific Coast, North",
+                                                      "Outer Pacific Coast, South", 
+                                                      "Russian River and Laguna de Santa Rosa", 
+                                                      "Northern Napa County",
+                                                      "San Pablo Bay", 
+                                                      "Central San Francisco Bay", 
+                                                      "Suisun Bay", 
+                                                      "Interior East Bay",
+                                                      "South San Francisco Bay", 
+                                                      "Santa Clara Valley")),
+         tidal = ifelse(subregion %in% c("RUR", "NNC", "IEB", "SCV"), FALSE, TRUE),
+         tidal = ifelse(subregion == "All", NA, tidal))
 options(scipen = 999)
 
 
@@ -29,7 +44,9 @@ spp_per_colony <- analysis_table %>%
   distinct(year, code, species) %>% 
   group_by(year, code) %>% 
   summarise(num.spp = n()) %>% 
-  ungroup() %>% 
+  ungroup()
+
+%>% 
   group_by(num.spp) %>% 
   summarise(num.years.spp = n())
 
@@ -38,9 +55,11 @@ spp_per_colony_wide <- spp_per_colony %>%
 
 
 
+spp_per_colony %>% 
   summarise(mean.spp = mean(num.spp),
             max.spp = max(num.spp),
-            min.spp = min(num.spp))
+            min.spp = min(num.spp)) 
+  
 
 # number of colonies and colony size by species
 n_colonies_spp <- analysis_table %>%
@@ -79,11 +98,22 @@ n_colonies <- bind_rows(n_colonies_combined, n_colonies_spp) %>%
   mutate(common.name = factor(common.name, levels = c("All species combined", "Great Egret", "Great Blue Heron", "Snowy Egret", "Black-crowned Night-Heron")))
 
 
-# basic summaries for the paper
+# basic summaries for the paper ----
 
 n_colonies_combined %>% filter(subregion == "All", common.name == "All species combined", year >= 1995) %>% view()
 
-n_colonies_spp %>% filter(common.name != "All species combined") %>% group_by(subregion, common.name) %>% summarise(mean.n.col = mean(n.colonies)) %>% view()
+n_colonies_spp %>% filter(common.name != "All species combined") %>% group_by(subregion, common.name) %>% summarise(mean.n.col = mean(n.colonies))
+
+n_colonies_spp %>% filter(common.name != "All species combined") %>% group_by(common.name) %>% summarise(mean.n.col = mean(n.colonies), 
+                                                                                                         sd.n.col = sd(n.colonies),
+                                                                                                         min.n.col = min(n.colonies),
+                                                                                                         max.n.col = max(n.colonies))
+
+n_colonies_spp %>% filter(common.name != "All species combined") %>% group_by(common.name) %>% summarise(mean.mean.col.size = mean(mean.col.size), 
+                                                                                                         sd.mean.col.size = sd(mean.col.size),
+                                                                                                         min.mean.col.size = min(mean.col.size),
+                                                                                                         max.mean.col.size = max(mean.col.size))
+
 
 n_colonies_spp %>% filter(common.name != "All species combined") %>% group_by(common.name) %>% filter(n.colonies == min(n.colonies) | n.colonies == max(n.colonies)) %>% distinct(common.name, n.colonies) %>% view()
 
@@ -203,15 +233,19 @@ zplot <- n_colonies_spp  %>%
         axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
     geom_blank(aes(y = max.y))
 
-ggsave(paste("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/colony_size_num_", zspp, ".png", sep = ""), width = 7, height = 7, dpi = 600)
+#ggsave(paste("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/colony_size_num_", zspp, ".png", sep = ""), width = 7, height = 7, dpi = 600)
 
 return(zplot)
 }
 
 col_size_num_plotter("GREG")
+ggsave("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 3.jpg", width = 7, height = 7, dpi = 600)
 col_size_num_plotter("GBHE")
+ggsave("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 4.jpg", width = 7, height = 7, dpi = 600)
 col_size_num_plotter("SNEG")
+ggsave("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 5.jpg", width = 7, height = 7, dpi = 600)
 col_size_num_plotter("BCNH")
+ggsave("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 6.jpg", width = 7, height = 7, dpi = 600)
 
 
 
