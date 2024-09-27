@@ -33,8 +33,24 @@ source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_mo
 
 all_mod_av_preds <- readRDS(here("fitted_models/all_mod_av_preds"))
 
-trend_analysis_table <- readRDS(here("data/trend_analysis_table"))
+trend_analysis_table <- readRDS(here("data/trend_analysis_table")) %>% 
+  mutate(subreg.name = str_replace(subreg.name, "River, Laguna", "River and Laguna"))
 
+subreg_key <- read.csv("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/subregion_key.csv") %>% 
+  mutate(subreg.name = str_replace(subreg.name, "River, Laguna", "River and Laguna"),
+         subreg.name = factor(subreg.name, levels = c("Entire study area", 
+                                                      "Outer Pacific Coast, North",
+                                                      "Outer Pacific Coast, South", 
+                                                      "Russian River and Laguna de Santa Rosa", 
+                                                      "Northern Napa County",
+                                                      "San Pablo Bay", 
+                                                      "Central San Francisco Bay", 
+                                                      "Suisun Bay", 
+                                                      "Interior East Bay",
+                                                      "South San Francisco Bay", 
+                                                      "Santa Clara Valley")),
+         tidal = ifelse(subregion %in% c("RUR", "NNC", "IEB", "SCV"), FALSE, TRUE),
+         tidal = ifelse(subregion == "All", NA, tidal))
 
 ```
 
@@ -74,10 +90,12 @@ mod_pred_plot <- pred_dat %>%
        x = "Year",
        title = translate_bird_names(zspp, "alpha.code", "common.name")) +
   theme_bw() +
-  theme(text = element_text(size=8)) +
+  theme(text = element_text(size=8),
+        #plot.margin = unit(c(0.5, 0.5, 0.25, 0.25), "cm"),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   geom_blank(aes(y = max.y))
 
-ggsave(paste("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_avg_pred_plot_", zspp, ".png", sep = ""), mod_pred_plot, width = 7, height = 9, dpi = 600)
+#ggsave(paste("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_avg_pred_plot_", zspp, ".png", sep = ""), mod_pred_plot, width = 7, height = 9, dpi = 600)
 
 mod_pred_plot
 
@@ -147,7 +165,7 @@ out_plot <- plot_grid(entireBA_mod_pred_plot, subreg_mod_pred_plot, ncol = 1, re
   draw_label("Year", x=0.5, y=  0, vjust=-0.1, angle= 0) +
   draw_label("Nest abundance", x=  0, y=0.5, vjust= 0, angle=90)
 
-ggsave(paste("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_avg_pred_plot_", zspp, ".png", sep = ""), out_plot, width = 7, height = 9, dpi = 600)
+#ggsave(paste("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/figures/mod_avg_pred_plot_", zspp, ".png", sep = ""), out_plot, width = 7, height = 9, dpi = 600)
 
 out_plot
 }
@@ -161,6 +179,8 @@ out_plot
 plot_mod_avg_pred("GREG")
 #plot_mod_avg_pred_2panel("GREG")
 
+ggsave("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 7.jpg", width = 7, height = 7, dpi = 600)
+
 ```
 
 <br>
@@ -170,6 +190,7 @@ plot_mod_avg_pred("GREG")
 plot_mod_avg_pred("GBHE")
 #plot_mod_avg_pred_2panel("GBHE")
 
+ggsave("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 8.jpg", width = 7, height = 7, dpi = 600)
 ```
 
 <br>
@@ -179,6 +200,7 @@ plot_mod_avg_pred("GBHE")
 plot_mod_avg_pred("SNEG")
 #plot_mod_avg_pred_2panel("SNEG")
 
+ggsave("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 9.jpg", width = 7, height = 7, dpi = 600)
 ```
 
 <br>
@@ -188,4 +210,5 @@ plot_mod_avg_pred("SNEG")
 plot_mod_avg_pred("BCNH")
 #plot_mod_avg_pred_2panel("BCNH")
 
+ggsave("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/documents/manuscript/proofs/SFEWS-Jennings_etal_Figure 10.jpg", width = 7, height = 7, dpi = 600)
 ```
