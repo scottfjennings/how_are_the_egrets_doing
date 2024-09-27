@@ -5,10 +5,11 @@
 
 # helper table for subregions
 subreg_key <- read.csv("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/subregion_key.csv") %>% 
-  mutate(subreg.name = factor(subreg.name, levels = c("Entire study area", 
+  mutate(subreg.name = str_replace(subreg.name, "River, Laguna", "River and Laguna"),
+         subreg.name = factor(subreg.name, levels = c("Entire study area", 
                                                       "Outer Pacific Coast, North",
                                                       "Outer Pacific Coast, South", 
-                                                      "Russian River, Laguna de Santa Rosa", 
+                                                      "Russian River and Laguna de Santa Rosa", 
                                                       "Northern Napa County",
                                                       "San Pablo Bay", 
                                                       "Central San Francisco Bay", 
