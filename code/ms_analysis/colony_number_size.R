@@ -8,15 +8,19 @@ library(here)
 
 
 #source_url("https://raw.githubusercontent.com/scottfjennings/HEP_data_work/master/HEP_code/HEP_utility_functions.R")
-source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/hep_trend_utilities.r")
-source("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/hep_analyses/how_are_the_egrets_doing/code/ms_analysis/hep_trend_utilities.r")
+source("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_code/HEP_utility_functions.R")
 
 
 # prepare data ----
-hepdata_location = here("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")
+hepdata_location = here("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/HEPDATA.accdb")
 # all these functions are in HEP_utility_functions.R
 hep_sites <- hep_sites_from_access(hepdata_location) %>% 
   dplyr::select(code, parent.code, site.name, parent.site.name, subregion)
+
+
+hep_start <- hep_from_access(hepdata_location)
+
 
 options(scipen = 999)
 
@@ -29,13 +33,29 @@ sfbbo_nests <- read.csv(here("data/CWB_peak_hep_nest_locs_through_2019.csv")) %>
   full_join(read.csv(here("data/all_sfbbo_sites_subreg.csv"))) %>% 
   filter(site.name != "Elmwood Correctional")
 
-col_size_table <- readRDS("C:/Users/scott.jennings/Documents/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
+col_size_table <- readRDS("C:/Users/scott.jennings/OneDrive - Audubon Canyon Ranch/Projects/core_monitoring_research/HEP/HEP_data_work/HEP_data/hep_annual_nest_abundance") %>%
   full_join(hep_sites) %>%
   bind_rows(sfbbo_nests) %>% 
   filter(!species %in% c("DCCO", "CAEG"), peakactvnsts > 0, !is.na(year), between(year, start.year, end.year)) %>% 
   #cut_never_nested() %>% 
   dplyr::select(year, subregion, code, species, peakactvnsts) %>% 
   left_join(subreg_key)
+
+col_size_table %>% 
+  filter(between(year, start.year, end.year)) %>% 
+  group_by(species) %>% 
+  summarise(mean.col.size = mean(peakactvnsts),
+            sd.col.size = sd(peakactvnsts),
+            min.col.size = min(peakactvnsts),
+            max.col.size = max(peakactvnsts)) %>% 
+  ungroup() 
+
+
+# biggest BCNH colonies
+filter(col_size_table, species == "BCNH") %>% 
+  arrange(-year, -peakactvnsts) %>% 
+  left_join(hep_sites %>% select(code, site.name)) %>% 
+  view()
 
 
 # figure with colony size and # colonies by subregion, for each species separately ----
@@ -70,7 +90,7 @@ col_size_table %>%
 }
 
 
-col_size_plotter("GREG")
+col_size_plotter("BCNH")
 ggsave(here("figures/greg_col_size_num.png"), width = 8)
 
 
@@ -91,7 +111,8 @@ col_size_table_out <- col_size_table %>%
   full_join(col_size_table %>%
               group_by(subreg.name, species) %>%
               summarize(mean.col.size = mean(peakactvnsts),
-                        sd.col.size = sd(peakactvnsts))) 
+                        sd.col.size = sd(peakactvnsts))) %>% 
+  ungroup()
   
   col_size_table_out_wide <- col_size_table_out %>% 
   mutate(n.col.out = paste(round(mean.n.col, 1), " (", round(sd.n.col, 1), ")", sep = ""),
@@ -117,6 +138,34 @@ flextable(col_size_table_out_wide) %>%
   save_as_docx(path = here("output/col_size_num_table.docx"))
             
 
+col_size_table_out %>% 
+  group_by(species) %>% 
+  summarise(mean.mean.n.col = mean(mean.n.col),
+            sd.mean.n.)
+
+# mean, sd, range number of colonies per subregion ----
+col_size_table %>% 
+  group_by(year, species, subreg.name) %>% 
+  summarise(n.col = n()) %>% 
+  ungroup() %>%
+  group_by(species) %>% 
+  summarise(mean.n.col = mean(n.col),
+            sd.n.col = sd(n.col),
+            min.n.col = min(n.col),
+            max.n.col = max(n.col)) %>% 
+  view()
+
+# mean, sd, range colony size per subregion ----
+col_size_table %>% 
+#  group_by(year, species, subreg.name) %>% 
+#  summarise(col.size = sum(peakactvnsts)) %>% 
+#  ungroup() %>% 
+  group_by(species) %>% 
+  summarise(mean.col.size = mean(peakactvnsts),
+            sd.col.size = sd(peakactvnsts),
+            min.col.size = min(peakactvnsts),
+            max.col.size = max(peakactvnsts)) %>% 
+  view()
 
 
 # single figure for # of colonies across the entire study area ----
@@ -142,7 +191,11 @@ ggsave(here("figures/total_active_colonies.png"), width = 8)
 
 
 
+# start year predictions for species x subregions
+all_mod_av_preds_per_change <- readRDS(here("fitted_models/all_mod_av_per_change")) # from analysis3_model_ave_estimates.R
 
-
-
+filter(all_mod_av_preds, year == 1995, alpha.code == "GBHE_IEB") %>%  
+  mutate(across(c("mod.avg.pred", "lower.CL", "upper.CL"), ~round(., 0)),
+         est.out = paste(mod.avg.pred, " (", lower.CL, ", ", upper.CL, ")", sep = "")) %>% 
+  select(est.out) 
 
